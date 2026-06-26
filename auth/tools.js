@@ -24,12 +24,12 @@ async function handleAbout() {
  */
 async function handleAuthenticate(args) {
   const force = args && args.force === true;
-  
+
   // For test mode, create a test token
   if (config.USE_TEST_MODE) {
     // Create a test token with a 1-hour expiry
     tokenManager.createTestTokens();
-    
+
     return {
       content: [{
         type: "text",
@@ -37,16 +37,37 @@ async function handleAuthenticate(args) {
       }]
     };
   }
-  
-  // For real authentication, generate an auth URL and instruct the user to visit it
-  const authUrl = `${config.AUTH_CONFIG.authServerUrl}/auth?client_id=${config.AUTH_CONFIG.clientId}`;
-  
-  return {
-    content: [{
-      type: "text",
-      text: `Authentication required. Please visit the following URL to authenticate with Microsoft: ${authUrl}\n\nAfter authentication, you will be redirected back to this application.`
-    }]
-  };
+
+  // Real authentication via OAuth 2.0 device code flow (public client, no secret).
+  const TokenStorage = require('./token-storage');
+  const storage = new TokenStorage();
+
+  try {
+    if (force) {
+      await storage.clearTokens();
+    }
+
+    const dc = await storage.startDeviceCode();
+
+    // Poll in the background; tokens are persisted to disk when sign-in completes.
+    storage.pollDeviceCode(dc.device_code, dc.interval, dc.expires_in)
+      .then(() => console.error('[AUTHENTICATE] Device code sign-in complete; tokens saved.'))
+      .catch((err) => console.error(`[AUTHENTICATE] Device code polling failed: ${err.message}`));
+
+    return {
+      content: [{
+        type: "text",
+        text: `To sign in, open ${dc.verification_uri} in a browser and enter this code:\n\n    ${dc.user_code}\n\nSign-in completes automatically a few seconds after you finish in the browser. Then run "check-auth-status" to confirm, or just use any Outlook tool.`
+      }]
+    };
+  } catch (error) {
+    return {
+      content: [{
+        type: "text",
+        text: `Failed to start authentication: ${error.message}`
+      }]
+    };
+  }
 }
 
 /**

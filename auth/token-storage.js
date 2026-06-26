@@ -8,18 +8,17 @@ class TokenStorage {
     const tenantId = process.env.MS_TENANT_ID || 'common';
     const authorityHost = (process.env.MS_AUTHORITY_HOST || 'https://login.microsoftonline.com').replace(/\/+$/, '');
 
+    // Public client (device code flow). No client secret is used or accepted.
     // Support both MS_CLIENT_ID (auth server / .env) and OUTLOOK_CLIENT_ID (Claude Desktop config)
     const clientId = process.env.MS_CLIENT_ID || process.env.OUTLOOK_CLIENT_ID;
-    const clientSecret = process.env.MS_CLIENT_SECRET || process.env.OUTLOOK_CLIENT_SECRET;
 
     this.config = {
       tokenStorePath: path.join(process.env.HOME || process.env.USERPROFILE, '.outlook-mcp-tokens.json'),
       clientId,
-      clientSecret,
-      redirectUri: process.env.MS_REDIRECT_URI || 'http://localhost:3333/auth/callback',
-      scopes: (process.env.MS_SCOPES || 'offline_access User.Read Mail.Read').split(' '),
+      scopes: (process.env.MS_SCOPES || 'offline_access User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite MailboxSettings.ReadWrite').split(' '),
       tenantId,
       tokenEndpoint: process.env.MS_TOKEN_ENDPOINT || `${authorityHost}/${tenantId}/oauth2/v2.0/token`,
+      deviceCodeEndpoint: process.env.MS_DEVICECODE_ENDPOINT || `${authorityHost}/${tenantId}/oauth2/v2.0/devicecode`,
       refreshTokenBuffer: 5 * 60 * 1000, // 5 minutes buffer for token refresh
       ...config // Allow overriding default config
     };
@@ -27,9 +26,102 @@ class TokenStorage {
     this._loadPromise = null;
     this._refreshPromise = null;
 
-    if (!this.config.clientId || !this.config.clientSecret) {
-      console.warn("TokenStorage: Client ID or Secret is not configured (checked MS_CLIENT_ID/OUTLOOK_CLIENT_ID). Token refresh will fail.");
+    if (!this.config.clientId) {
+      console.warn("TokenStorage: MS_CLIENT_ID is not configured. Authentication will fail.");
     }
+  }
+
+  /**
+   * POST application/x-www-form-urlencoded to an OAuth endpoint.
+   * @returns {Promise<{statusCode:number, body:object}>}
+   */
+  _httpPostForm(endpoint, formObj) {
+    const postData = querystring.stringify(formObj);
+    const requestOptions = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    return new Promise((resolve, reject) => {
+      const req = https.request(endpoint, requestOptions, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          try {
+            resolve({ statusCode: res.statusCode, body: JSON.parse(data) });
+          } catch (e) {
+            reject(new Error(`Invalid response from ${endpoint}: ${data}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  /**
+   * Starts the OAuth 2.0 device code flow.
+   * @returns {Promise<object>} - { user_code, device_code, verification_uri, expires_in, interval, message }
+   */
+  async startDeviceCode() {
+    if (!this.config.clientId) {
+      throw new Error('MS_CLIENT_ID is not configured. Cannot start device code flow.');
+    }
+    const { statusCode, body } = await this._httpPostForm(this.config.deviceCodeEndpoint, {
+      client_id: this.config.clientId,
+      scope: this.config.scopes.join(' ')
+    });
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error(body.error_description || `Device code request failed with status ${statusCode}`);
+    }
+    return body;
+  }
+
+  /**
+   * Polls the token endpoint until the user completes device code sign-in.
+   * On success, stores and persists the tokens.
+   * @returns {Promise<object>} - The stored tokens
+   */
+  async pollDeviceCode(deviceCode, intervalSeconds, expiresInSeconds) {
+    let intervalMs = (intervalSeconds || 5) * 1000;
+    const deadline = Date.now() + (expiresInSeconds || 900) * 1000;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+
+      const { statusCode, body } = await this._httpPostForm(this.config.tokenEndpoint, {
+        client_id: this.config.clientId,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: deviceCode
+      });
+
+      if (statusCode >= 200 && statusCode < 300 && body.access_token) {
+        this.tokens = {
+          access_token: body.access_token,
+          refresh_token: body.refresh_token,
+          expires_in: body.expires_in,
+          expires_at: Date.now() + (body.expires_in * 1000),
+          scope: body.scope,
+          token_type: body.token_type
+        };
+        await this._saveTokensToFile();
+        console.error('Device code authentication successful. Tokens saved.');
+        return this.tokens;
+      }
+
+      if (body.error === 'authorization_pending') {
+        continue;
+      }
+      if (body.error === 'slow_down') {
+        intervalMs += 5000;
+        continue;
+      }
+      throw new Error(body.error_description || `Device code flow failed: ${body.error}`);
+    }
+    throw new Error('Device code flow timed out — user did not authenticate in time.');
   }
 
   async _loadTokensFromFile() {
@@ -131,7 +223,6 @@ class TokenStorage {
     console.log('Attempting to refresh access token...');
     const postData = querystring.stringify({
       client_id: this.config.clientId,
-      client_secret: this.config.clientSecret,
       grant_type: 'refresh_token',
       refresh_token: this.tokens.refresh_token,
       scope: this.config.scopes.join(' ')
@@ -194,74 +285,6 @@ class TokenStorage {
     });
 
     return this._refreshPromise.then(tokens => tokens.access_token);
-  }
-
-
-  async exchangeCodeForTokens(authCode) {
-    if (!this.config.clientId || !this.config.clientSecret) {
-        throw new Error("Client ID or Client Secret is not configured. Cannot exchange code for tokens.");
-    }
-    console.log('Exchanging authorization code for tokens...');
-    const postData = querystring.stringify({
-      client_id: this.config.clientId,
-      client_secret: this.config.clientSecret,
-      grant_type: 'authorization_code',
-      code: authCode,
-      redirect_uri: this.config.redirectUri,
-      scope: this.config.scopes.join(' ')
-    });
-
-    const requestOptions = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-
-    return new Promise((resolve, reject) => {
-      const req = https.request(this.config.tokenEndpoint, requestOptions, (res) => {
-        let data = '';
-        res.on('data', (chunk) => data += chunk);
-        res.on('end', async () => {
-          try {
-            const responseBody = JSON.parse(data);
-            if (res.statusCode >= 200 && res.statusCode < 300) {
-              this.tokens = {
-                access_token: responseBody.access_token,
-                refresh_token: responseBody.refresh_token,
-                expires_in: responseBody.expires_in,
-                expires_at: Date.now() + (responseBody.expires_in * 1000),
-                scope: responseBody.scope,
-                token_type: responseBody.token_type
-              };
-              try {
-                await this._saveTokensToFile();
-                console.log('Tokens exchanged and saved successfully.');
-                resolve(this.tokens);
-              } catch (saveError) {
-                console.error('Failed to save exchanged tokens:', saveError);
-                // Similar to refresh, tokens are in memory but not persisted.
-                // Rejecting to indicate the operation wasn't fully successful.
-                reject(new Error(`Tokens exchanged but failed to save: ${saveError.message}`));
-              }
-            } else {
-              console.error('Error exchanging code for tokens:', responseBody);
-              reject(new Error(responseBody.error_description || `Token exchange failed with status ${res.statusCode}`));
-            }
-          } catch (e) { // Catch any error during parsing or saving
-            console.error('Error processing token exchange response or saving tokens:', e, "Raw data:", data);
-            reject(new Error(`Error processing token response: ${e.message}. Response data: ${data}`));
-          }
-        });
-      });
-      req.on('error', (error) => {
-        console.error('HTTP error during code exchange:', error);
-        reject(error);
-      });
-      req.write(postData);
-      req.end();
-    });
   }
 
   // Utility to clear tokens, e.g., for logout or forcing re-auth
