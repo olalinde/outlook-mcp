@@ -163,8 +163,11 @@ const onedriveTools = [
       required: ["name"]
     },
     handler: handleCreateFolder
-  },
-  {
+  }
+  // onedrive-delete avregistrerat — verktyget exponeras inte längre via MCP.
+  // Implementeringen i onedrive/folder.js (handleDeleteItem) är orörd; kommentera in nedan för att återaktivera.
+  /*
+  ,{
     name: "onedrive-delete",
     description: "Delete a file or folder from OneDrive",
     inputSchema: {
@@ -183,6 +186,7 @@ const onedriveTools = [
     },
     handler: handleDeleteItem
   }
+  */
 ];
 
 module.exports = {

@@ -103,8 +103,11 @@ const calendarTools = [
       required: ["eventId"]
     },
     handler: handleCancelEvent
-  },
-  {
+  }
+  // delete-event avregistrerat — verktyget exponeras inte längre via MCP.
+  // Implementeringen i calendar/delete.js och handleDeleteEvent är orörda; kommentera in nedan för att återaktivera.
+  /*
+  ,{
     name: "delete-event",
     description: "Deletes a calendar event",
     inputSchema: {
@@ -119,6 +122,7 @@ const calendarTools = [
     },
     handler: handleDeleteEvent
   }
+  */
 ];
 
 module.exports = {

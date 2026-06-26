@@ -190,8 +190,11 @@ const emailTools = [
       required: ["id"]
     },
     handler: handleMarkAsRead
-  },
-  {
+  }
+  // delete-email avregistrerat — verktyget exponeras inte längre via MCP (kan permanent-radera mejl).
+  // Implementeringen i email/delete.js och handleDeleteEmail är orörda; kommentera in nedan för att återaktivera.
+  /*
+  ,{
     name: "delete-email",
     description: "Deletes an email by moving it to Deleted Items (trash). Use permanent=true to hard delete.",
     inputSchema: {
@@ -210,6 +213,7 @@ const emailTools = [
     },
     handler: handleDeleteEmail
   }
+  */
 ];
 
 module.exports = {
