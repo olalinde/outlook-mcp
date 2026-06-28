@@ -3,7 +3,7 @@
  */
 const { callGraphAPI } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
-const { getFolderIdByName } = require('../email/folder-utils');
+const { getFolderIdByName, getChildFolderIdByName } = require('../email/folder-utils');
 
 /**
  * Create folder handler
@@ -64,27 +64,27 @@ async function handleCreateFolder(args) {
  */
 async function createMailFolder(accessToken, folderName, parentFolderName) {
   try {
-    // Check if a folder with this name already exists
-    const existingFolder = await getFolderIdByName(accessToken, folderName);
-    if (existingFolder) {
-      return {
-        success: false,
-        message: `A folder named "${folderName}" already exists.`
-      };
-    }
-    
-    // If parent folder specified, find its ID
+    // Resolve parent folder first so we can scope the duplicate check correctly
+    let parentId = null;
     let endpoint = 'me/mailFolders';
     if (parentFolderName) {
-      const parentId = await getFolderIdByName(accessToken, parentFolderName);
+      parentId = await getFolderIdByName(accessToken, parentFolderName);
       if (!parentId) {
         return {
           success: false,
           message: `Parent folder "${parentFolderName}" not found. Please specify a valid parent folder or leave it blank to create at the root level.`
         };
       }
-      
       endpoint = `me/mailFolders/${parentId}/childFolders`;
+    }
+
+    // Check for duplicate only within the target parent (not globally)
+    const existingFolder = await getChildFolderIdByName(accessToken, parentId, folderName);
+    if (existingFolder) {
+      return {
+        success: false,
+        message: `A folder named "${folderName}" already exists${parentFolderName ? ` inside "${parentFolderName}"` : ' at the root level'}.`
+      };
     }
     
     // Create the folder

@@ -60,50 +60,77 @@ async function resolveFolderPath(accessToken, folderName) {
 }
 
 /**
- * Get the ID of a mail folder by its name
+ * Get the ID of a child folder by name within a specific parent folder.
  * @param {string} accessToken - Access token
- * @param {string} folderName - Name of the folder to find
+ * @param {string|null} parentFolderId - Parent folder ID, or null to search root
+ * @param {string} name - Folder display name to find
+ * @returns {Promise<string|null>} - Folder ID or null if not found
+ */
+async function getChildFolderIdByName(accessToken, parentFolderId, name) {
+  try {
+    const endpoint = parentFolderId
+      ? `me/mailFolders/${parentFolderId}/childFolders`
+      : 'me/mailFolders';
+
+    // Try exact match first
+    const response = await callGraphAPI(accessToken, 'GET', endpoint, null, {
+      $filter: `displayName eq '${name}'`,
+      $select: 'id,displayName'
+    });
+    if (response.value && response.value.length > 0) {
+      return response.value[0].id;
+    }
+
+    // Fallback: case-insensitive scan
+    const allResponse = await callGraphAPI(accessToken, 'GET', endpoint, null, {
+      $top: 100,
+      $select: 'id,displayName'
+    });
+    if (allResponse.value) {
+      const lower = name.toLowerCase();
+      const match = allResponse.value.find(f => f.displayName.toLowerCase() === lower);
+      if (match) return match.id;
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error finding child folder "${name}": ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Get the ID of a mail folder by its name or path.
+ * Supports path notation like "Inbox/2024/Viktigt" to resolve nested folders.
+ * @param {string} accessToken - Access token
+ * @param {string} folderName - Folder name or slash-separated path
  * @returns {Promise<string|null>} - Folder ID or null if not found
  */
 async function getFolderIdByName(accessToken, folderName) {
   try {
-    // First try with exact match filter
-    console.error(`Looking for folder with name "${folderName}"`);
-    const response = await callGraphAPI(
-      accessToken,
-      'GET',
-      'me/mailFolders',
-      null,
-      { $filter: `displayName eq '${folderName}'` }
-    );
-    
-    if (response.value && response.value.length > 0) {
-      console.error(`Found folder "${folderName}" with ID: ${response.value[0].id}`);
-      return response.value[0].id;
-    }
-    
-    // If exact match fails, try to get all folders and do a case-insensitive comparison
-    console.error(`No exact match found for "${folderName}", trying case-insensitive search`);
-    const allFoldersResponse = await callGraphAPI(
-      accessToken,
-      'GET',
-      'me/mailFolders',
-      null,
-      { $top: 100 }
-    );
-    
-    if (allFoldersResponse.value) {
-      const lowerFolderName = folderName.toLowerCase();
-      const matchingFolder = allFoldersResponse.value.find(
-        folder => folder.displayName.toLowerCase() === lowerFolderName
-      );
-      
-      if (matchingFolder) {
-        console.error(`Found case-insensitive match for "${folderName}" with ID: ${matchingFolder.id}`);
-        return matchingFolder.id;
+    console.error(`Looking for folder "${folderName}"`);
+
+    // Path notation: resolve each segment in turn
+    if (folderName.includes('/')) {
+      const parts = folderName.split('/').map(p => p.trim()).filter(Boolean);
+      let currentId = null;
+      for (const part of parts) {
+        currentId = await getChildFolderIdByName(accessToken, currentId, part);
+        if (!currentId) {
+          console.error(`Path segment "${part}" not found`);
+          return null;
+        }
       }
+      console.error(`Resolved path "${folderName}" to ID: ${currentId}`);
+      return currentId;
     }
-    
+
+    // Simple name: search root-level folders
+    const id = await getChildFolderIdByName(accessToken, null, folderName);
+    if (id) {
+      console.error(`Found folder "${folderName}" with ID: ${id}`);
+      return id;
+    }
+
     console.error(`No folder found matching "${folderName}"`);
     return null;
   } catch (error) {
@@ -171,5 +198,6 @@ module.exports = {
   WELL_KNOWN_FOLDERS,
   resolveFolderPath,
   getFolderIdByName,
+  getChildFolderIdByName,
   getAllFolders
 };
