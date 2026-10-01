@@ -16,6 +16,7 @@ const WELL_KNOWN_FOLDERS = {
   'inbox': 'me/mailFolders/inbox/messages',
   'drafts': 'me/mailFolders/drafts/messages',
   'sent': 'me/mailFolders/sentItems/messages',
+  'sentitems': 'me/mailFolders/sentItems/messages',
   'deleted': 'me/mailFolders/deletedItems/messages',
   'junk': 'me/mailFolders/junkemail/messages',
   'archive': 'me/mailFolders/archive/messages'

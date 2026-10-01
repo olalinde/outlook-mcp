@@ -8,17 +8,20 @@ const config = require('../config');
 const { callGraphAPI } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 const { processHtmlEmail, sanitizeHtmlToText } = require('../utils/html-sanitizer');
+const { listAttachmentMetadata } = require('./attachments');
 
 /**
  * Read email handler
  * @param {object} args - Tool arguments
  * @param {string} args.id - Email ID (required)
  * @param {boolean} args.includeRawHtml - If true, include raw HTML (unsafe, for debugging only)
+ * @param {string} args.format - "text" (default, sanitized) or "html" (JSON with unmodified body + attachments)
  * @returns {object} - MCP response
  */
 async function handleReadEmail(args) {
   const emailId = args.id;
   const includeRawHtml = args.includeRawHtml === true;
+  const format = args.format === 'html' ? 'html' : 'text';
 
   if (!emailId) {
     return {
@@ -36,7 +39,7 @@ async function handleReadEmail(args) {
     // Make API call to get email details
     const endpoint = `me/messages/${encodeURIComponent(emailId)}`;
     const queryParams = {
-      $select: config.EMAIL_DETAIL_FIELDS
+      $select: format === 'html' ? `${config.EMAIL_DETAIL_FIELDS},sentDateTime` : config.EMAIL_DETAIL_FIELDS
     };
 
     try {
@@ -50,6 +53,33 @@ async function handleReadEmail(args) {
               text: `Email with ID ${emailId} not found.`
             }
           ]
+        };
+      }
+
+      // format "html": JSON with the unmodified body and attachment metadata.
+      // Messages with only inline attachments report hasAttachments=false, so the list is always fetched.
+      if (format === 'html') {
+        const formatRecipients = list => (list || []).map(r => ({
+          name: r.emailAddress?.name || null,
+          address: r.emailAddress?.address || null
+        }));
+        const attachments = await listAttachmentMetadata(accessToken, emailId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              id: email.id,
+              subject: email.subject,
+              from: email.from ? formatRecipients([email.from])[0] : null,
+              to: formatRecipients(email.toRecipients),
+              cc: formatRecipients(email.ccRecipients),
+              sentDateTime: email.sentDateTime || null,
+              receivedDateTime: email.receivedDateTime || null,
+              bodyContentType: email.body?.contentType || null,
+              body: email.body?.content || '',
+              attachments
+            })
+          }]
         };
       }
 

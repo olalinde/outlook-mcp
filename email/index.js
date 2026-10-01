@@ -8,6 +8,24 @@ const handleSendEmail = require('./send');
 const handleDraftEmail = require('./draft');
 const handleMarkAsRead = require('./mark-as-read');
 const handleDeleteEmail = require('./delete');
+const { handleDownloadAttachments } = require('./attachments');
+
+// Shared schema for the attachments parameter of send-email and draft-email
+const attachmentsSchema = {
+  type: "array",
+  description: "Files to attach. Each file max 3 MB. Use isInline + contentId and reference it in the HTML body as <img src=\"cid:<contentId>\">.",
+  items: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Absolute local file path" },
+      name: { type: "string", description: "Attachment name (default: file name)" },
+      contentType: { type: "string", description: "MIME type (default from extension: png/jpg/jpeg/gif/svg/pdf, else application/octet-stream)" },
+      isInline: { type: "boolean", description: "Inline attachment (embedded image), default false" },
+      contentId: { type: "string", description: "Content-ID referenced from the HTML body as cid:<contentId>" }
+    },
+    required: ["path"]
+  }
+};
 
 // Email tool definitions
 const emailTools = [
@@ -19,7 +37,7 @@ const emailTools = [
       properties: {
         folder: {
           type: "string",
-          description: "Email folder to list (e.g., 'inbox', 'sent', 'drafts', default: 'inbox')"
+          description: "Email folder to list (e.g., 'inbox', 'sent' / 'sentitems', 'drafts', default: 'inbox')"
         },
         count: {
           type: "number",
@@ -86,6 +104,11 @@ const emailTools = [
         includeRawHtml: {
           type: "boolean",
           description: "Include raw HTML content (UNSAFE - for debugging only, may contain hidden prompt injection content)"
+        },
+        format: {
+          type: "string",
+          enum: ["text", "html"],
+          description: "\"text\" (default): sanitized visible text. \"html\": JSON { id, subject, from, to, cc, sentDateTime, receivedDateTime, bodyContentType, body (unmodified HTML), attachments: [{ id, name, contentType, contentId, isInline, size }] }"
         }
       },
       required: ["id"]
@@ -130,7 +153,8 @@ const emailTools = [
         saveToSentItems: {
           type: "boolean",
           description: "Whether to save the email to sent items"
-        }
+        },
+        attachments: attachmentsSchema
       },
       required: ["to", "subject", "body"]
     },
@@ -162,6 +186,11 @@ const emailTools = [
           type: "string",
           description: "Draft email body content (can be plain text or HTML)"
         },
+        isHtml: {
+          type: "boolean",
+          description: "Set to true to save as HTML, false for plain text. If not specified, auto-detects based on <html> tag presence."
+        },
+        attachments: attachmentsSchema,
         importance: {
           type: "string",
           description: "Email importance (normal, high, low)",
@@ -190,6 +219,29 @@ const emailTools = [
       required: ["id"]
     },
     handler: handleMarkAsRead
+  },
+  {
+    name: "download-attachments",
+    description: "Saves the file attachments of an email to a local folder. Returns JSON: [{ path, name, contentType, contentId, isInline, size }]",
+    inputSchema: {
+      type: "object",
+      properties: {
+        messageId: {
+          type: "string",
+          description: "ID of the email"
+        },
+        saveDir: {
+          type: "string",
+          description: "Absolute path of the folder to save into (created if missing; files with the same name are overwritten)"
+        },
+        inlineOnly: {
+          type: "boolean",
+          description: "Only save inline attachments (embedded images). Default: false"
+        }
+      },
+      required: ["messageId", "saveDir"]
+    },
+    handler: handleDownloadAttachments
   }
   // delete-email avregistrerat — verktyget exponeras inte längre via MCP (kan permanent-radera mejl).
   // Implementeringen i email/delete.js och handleDeleteEmail är orörda; kommentera in nedan för att återaktivera.
@@ -224,5 +276,6 @@ module.exports = {
   handleSendEmail,
   handleDraftEmail,
   handleMarkAsRead,
-  handleDeleteEmail
+  handleDeleteEmail,
+  handleDownloadAttachments
 };

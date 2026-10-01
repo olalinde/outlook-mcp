@@ -4,6 +4,7 @@
 const config = require('../config');
 const { callGraphAPI } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
+const { buildFileAttachments } = require('./attachments');
 
 /**
  * Send email handler
@@ -11,7 +12,7 @@ const { ensureAuthenticated } = require('../auth');
  * @returns {object} - MCP response
  */
 async function handleSendEmail(args) {
-  const { to, cc, bcc, subject, body, importance = 'normal', saveToSentItems = true, isHtml } = args;
+  const { to, cc, bcc, subject, body, importance = 'normal', saveToSentItems = true, isHtml, attachments } = args;
   
   // Validate required parameters
   if (!to) {
@@ -42,6 +43,9 @@ async function handleSendEmail(args) {
   }
   
   try {
+    // Read attachment files first so file errors are reported before any API call
+    const fileAttachments = buildFileAttachments(attachments);
+
     // Get access token
     const accessToken = await ensureAuthenticated();
     
@@ -89,7 +93,8 @@ async function handleSendEmail(args) {
         toRecipients,
         ccRecipients: ccRecipients.length > 0 ? ccRecipients : undefined,
         bccRecipients: bccRecipients.length > 0 ? bccRecipients : undefined,
-        importance
+        importance,
+        attachments: fileAttachments.length > 0 ? fileAttachments : undefined
       },
       saveToSentItems
     };
@@ -100,7 +105,7 @@ async function handleSendEmail(args) {
     return {
       content: [{ 
         type: "text", 
-        text: `Email sent successfully!\n\nSubject: ${subject}\nRecipients: ${toRecipients.length}${ccRecipients.length > 0 ? ` + ${ccRecipients.length} CC` : ''}${bccRecipients.length > 0 ? ` + ${bccRecipients.length} BCC` : ''}\nMessage Length: ${body.length} characters`
+        text: `Email sent successfully!\n\nSubject: ${subject}\nRecipients: ${toRecipients.length}${ccRecipients.length > 0 ? ` + ${ccRecipients.length} CC` : ''}${bccRecipients.length > 0 ? ` + ${bccRecipients.length} BCC` : ''}\nMessage Length: ${body.length} characters${fileAttachments.length > 0 ? `\nAttachments: ${fileAttachments.length}` : ''}`
       }]
     };
   } catch (error) {

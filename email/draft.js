@@ -3,6 +3,7 @@
  */
 const { callGraphAPI } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
+const { buildFileAttachments } = require('./attachments');
 
 /**
  * Draft email handler
@@ -12,9 +13,12 @@ const { ensureAuthenticated } = require('../auth');
  * @returns {object} - MCP response
  */
 async function handleDraftEmail(args) {
-  const { to, cc, bcc, subject = '', body = '', importance = 'normal' } = args || {};
+  const { to, cc, bcc, subject = '', body = '', importance = 'normal', isHtml, attachments } = args || {};
 
   try {
+    // Read attachment files first so file errors are reported before any API call
+    const fileAttachments = buildFileAttachments(attachments);
+
     // Get access token
     const accessToken = await ensureAuthenticated();
 
@@ -41,13 +45,16 @@ async function handleDraftEmail(args) {
     const messageObject = {
       subject,
       body: {
-        contentType: typeof body === 'string' && body.toLowerCase().includes('<html') ? 'html' : 'text',
+        contentType: isHtml === true ? 'html' :
+                     isHtml === false ? 'text' :
+                     (typeof body === 'string' && body.toLowerCase().includes('<html') ? 'html' : 'text'),
         content: body
       },
       toRecipients: toRecipients.length > 0 ? toRecipients : undefined,
       ccRecipients: ccRecipients.length > 0 ? ccRecipients : undefined,
       bccRecipients: bccRecipients.length > 0 ? bccRecipients : undefined,
-      importance
+      importance,
+      attachments: fileAttachments.length > 0 ? fileAttachments : undefined
     };
 
     // Create draft message
@@ -56,7 +63,7 @@ async function handleDraftEmail(args) {
     return {
       content: [{
         type: "text",
-        text: `Draft created successfully!\n\nDraft ID: ${draft.id}\nSubject: ${draft.subject || '(no subject)'}\nRecipients: ${toRecipients.length}${ccRecipients.length > 0 ? ` + ${ccRecipients.length} CC` : ''}${bccRecipients.length > 0 ? ` + ${bccRecipients.length} BCC` : ''}`
+        text: `Draft created successfully!\n\nDraft ID: ${draft.id}\nSubject: ${draft.subject || '(no subject)'}\nRecipients: ${toRecipients.length}${ccRecipients.length > 0 ? ` + ${ccRecipients.length} CC` : ''}${bccRecipients.length > 0 ? ` + ${bccRecipients.length} BCC` : ''}${fileAttachments.length > 0 ? `\nAttachments: ${fileAttachments.length}` : ''}`
       }]
     };
   } catch (error) {

@@ -17,7 +17,8 @@ A comprehensive MCP (Model Context Protocol) server that connects Claude with Mi
 ├── config.js                # Configuration settings
 ├── auth/                    # Authentication modules
 │   ├── index.js             # Authentication exports
-│   ├── token-manager.js     # Token storage and refresh (Graph + Flow)
+│   ├── token-storage.js     # Graph token store, refresh and device code flow (used for Graph calls)
+│   ├── token-manager.js     # Flow tokens and test-mode tokens
 │   └── tools.js             # Auth-related tools
 ├── calendar/                # Calendar functionality
 │   ├── index.js             # Calendar exports
@@ -33,6 +34,8 @@ A comprehensive MCP (Model Context Protocol) server that connects Claude with Mi
 │   ├── search.js            # Search emails
 │   ├── read.js              # Read email
 │   ├── send.js              # Send email
+│   ├── draft.js             # Create draft
+│   ├── attachments.js       # File attachments (send/draft) and download-attachments
 │   └── mark-as-read.js      # Mark email read/unread
 ├── folder/                  # Folder functionality
 │   ├── index.js             # Folder exports
@@ -60,6 +63,8 @@ A comprehensive MCP (Model Context Protocol) server that connects Claude with Mi
 │   ├── run-flow.js          # Trigger flow
 │   ├── list-runs.js         # Run history
 │   └── toggle-flow.js       # Enable/disable flow
+├── scripts/
+│   └── login.mjs            # Sign-in CLI (device code) and status
 └── utils/                   # Utility functions
     ├── graph-api.js         # Microsoft Graph API helper
     ├── odata-helpers.js     # OData query building
@@ -81,10 +86,12 @@ A comprehensive MCP (Model Context Protocol) server that connects Claude with Mi
 ### Outlook (Email & Calendar)
 | Tool | Description |
 |------|-------------|
-| `list-emails` | List recent emails from inbox |
+| `list-emails` | List recent emails (`folder`: inbox, `sent`/`sentitems`, drafts, ...) |
 | `search-emails` | Search emails with filters |
-| `read-email` | Read email content |
-| `send-email` | Send a new email |
+| `read-email` | Read email content (`format: "html"` for the unmodified HTML + attachments) |
+| `send-email` | Send a new email (optional `attachments`) |
+| `draft-email` | Create a draft (optional `attachments`, `isHtml`) |
+| `download-attachments` | Save an email's file attachments to a local folder |
 | `mark-as-read` | Mark email as read/unread |
 | `list-events` | List calendar events |
 | `create-event` | Create calendar event |
@@ -96,6 +103,37 @@ A comprehensive MCP (Model Context Protocol) server that connects Claude with Mi
 | `move-emails` | Move emails between folders |
 | `list-rules` | List inbox rules |
 | `create-rule` | Create inbox rule |
+
+### Attachments and HTML email
+
+`send-email` and `draft-email` take an optional `attachments` array:
+
+```json
+"attachments": [
+  { "path": "C:/temp/diagram.png", "isInline": true, "contentId": "diagram1" },
+  { "path": "C:/temp/rapport.pdf", "name": "Rapport.pdf" }
+]
+```
+
+- `path` (required): absolute local file path. The file is read and sent as a Graph `#microsoft.graph.fileAttachment`.
+- `name`: defaults to the file name.
+- `contentType`: defaults from the extension (png, jpg/jpeg, gif, svg, pdf), otherwise `application/octet-stream`.
+- `isInline` (default false) and `contentId`: for embedded images, referenced in the HTML body as `<img src="cid:diagram1">`.
+- Max 3 MB per file; larger files are rejected with an error before anything is sent.
+- The HTML body is sent unchanged (inline styles are kept). Use `isHtml: true` when the body has no `<html>` tag.
+
+`download-attachments` — `{ messageId, saveDir, inlineOnly? }`: saves the message's file attachments into `saveDir`
+(absolute; created if missing). Unsafe characters in names are replaced, files with the same name in `saveDir` are
+overwritten, and duplicate names within one message get `-1`, `-2` .... Returns JSON:
+
+```json
+[{ "path": "C:/temp/ut/diagram.png", "name": "diagram.png", "contentType": "image/png", "contentId": "diagram1", "isInline": true, "size": 12345 }]
+```
+
+`read-email` with `format: "html"` returns JSON instead of sanitized text:
+`{ id, subject, from, to, cc, sentDateTime, receivedDateTime, bodyContentType, body, attachments: [{ id, name, contentType, contentId, isInline, size }] }`,
+where `body` is the unmodified HTML. Note that this bypasses the prompt-injection sanitizing of the default text format.
+To find a sent message: `list-emails` with `folder: "sentitems"` (or `"sent"`) lists subjects and ids.
 
 ### OneDrive
 | Tool | Description |
@@ -229,6 +267,33 @@ Add to your Claude Desktop config:
 3. Visit the provided URL and sign in
 4. Tokens saved to `~/.outlook-mcp-tokens.json`
 
+### Sign-in CLI (`scripts/login.mjs`)
+
+The server uses `auth/token-storage.js` for all Graph calls: tokens in `~/.outlook-mcp-tokens.json`, app registration
+from `MS_CLIENT_ID` (or `OUTLOOK_CLIENT_ID`) and `MS_TENANT_ID`. An expired access token is refreshed automatically
+with the refresh token; only when that fails do tools answer "Authentication required".
+
+Sign in outside Claude (works from any working directory; stdout is JSON lines only, logs go to stderr):
+
+```bash
+node scripts/login.mjs
+# {"type":"code","userCode":"ABCD1234","verificationUri":"https://microsoft.com/devicelogin","message":"...","expiresIn":900}
+# ... user signs in in the browser ...
+# {"type":"done","account":"name@company.com"}
+# on failure: {"type":"error","message":"..."} and exit code 1
+```
+
+Status (tries a refresh if the access token has expired, and saves the new tokens if it works; always exit code 0):
+
+```bash
+node scripts/login.mjs --status
+# {"authenticated":true,"expiresAt":"2026-10-01T12:00:00.000Z","hasRefreshToken":true,"account":"name@company.com"}
+```
+
+**Requirement: public client flows.** The device code flow needs the app registration to allow it: Azure Portal →
+App registrations → the app → **Authentication** → **Allow public client flows** ("Tillåt offentliga klientflöden")
+= **Yes** → Save. Otherwise sign-in fails with AADSTS7000218, and `login.mjs` prints that instruction.
+
 ### Power Automate (Optional)
 
 Power Automate requires a separate token with the Flow API scope. Configure additional Azure AD permissions for `https://service.flow.microsoft.com//.default` scope.
@@ -257,7 +322,7 @@ npm run auth-server
 - Use the secret **VALUE**, not the Secret ID
 
 **"Authentication required"**
-- Delete `~/.outlook-mcp-tokens.json` and re-authenticate
+- The refresh token no longer works: run `node scripts/login.mjs` (or the `authenticate` tool) to sign in again
 
 ## Testing
 
