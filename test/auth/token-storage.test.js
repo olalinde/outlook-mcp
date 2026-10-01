@@ -9,6 +9,7 @@ jest.mock('fs', () => ({
     readFile: jest.fn(),
     writeFile: jest.fn(),
     unlink: jest.fn(),
+    stat: jest.fn(),
   }
 }));
 jest.mock('https');
@@ -474,6 +475,82 @@ describe('TokenStorage', () => {
 
         const token = await tokenStorage.getValidAccessToken();
         expect(token).toBeNull();
+    });
+  });
+
+  describe('reloading tokens written by another process', () => {
+    it('uses a newer sign-in from the token file instead of refreshing expired in-memory tokens', async () => {
+      tokenStorage.tokens = { access_token: 'stale', refresh_token: 'revoked', expires_at: Date.now() - 1000 };
+      tokenStorage._fileMtimeMs = 1000;
+      fs.stat.mockResolvedValue({ mtimeMs: 2000 }); // written by scripts/login.mjs
+      fs.readFile.mockResolvedValue(JSON.stringify({ access_token: 'fresh', refresh_token: 'r2', expires_at: Date.now() + 3600000 }));
+      const refreshSpy = jest.spyOn(tokenStorage, 'refreshAccessToken');
+
+      expect(await tokenStorage.getValidAccessToken()).toBe('fresh');
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not re-read an unchanged file', async () => {
+      tokenStorage.tokens = { access_token: 'old', refresh_token: 'r', expires_at: Date.now() - 1000 };
+      tokenStorage._fileMtimeMs = 1000;
+      fs.stat.mockResolvedValue({ mtimeMs: 1000 });
+      jest.spyOn(tokenStorage, 'refreshAccessToken').mockResolvedValue('refreshed');
+
+      expect(await tokenStorage.getValidAccessToken()).toBe('refreshed');
+      expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('does not touch the file while the access token is valid', async () => {
+      tokenStorage.tokens = { access_token: 'valid', expires_at: Date.now() + 3600000 };
+      expect(await tokenStorage.getValidAccessToken()).toBe('valid');
+      expect(fs.stat).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getValidFlowAccessToken', () => {
+    it('returns a valid Flow token even when the Graph token has expired', async () => {
+      tokenStorage.tokens = {
+        access_token: 'graph', refresh_token: 'r', expires_at: Date.now() - 1000,
+        flow_access_token: 'flow', flow_expires_at: Date.now() + 3600000
+      };
+      const postSpy = jest.spyOn(tokenStorage, '_httpPostForm');
+      expect(await tokenStorage.getValidFlowAccessToken()).toBe('flow');
+      expect(postSpy).not.toHaveBeenCalled();
+    });
+
+    it('gets a Flow token with the refresh token when there is none or it has expired', async () => {
+      tokenStorage.tokens = { access_token: 'graph', refresh_token: 'graph_refresh', expires_at: Date.now() - 1000 };
+      const postSpy = jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({
+        statusCode: 200, body: { access_token: 'new_flow', refresh_token: 'flow_refresh', expires_in: 3600 }
+      });
+      jest.spyOn(tokenStorage, '_saveTokensToFile').mockResolvedValue();
+
+      expect(await tokenStorage.getValidFlowAccessToken()).toBe('new_flow');
+      expect(postSpy).toHaveBeenCalledWith(baseConfig.tokenEndpoint, {
+        client_id: baseConfig.clientId,
+        grant_type: 'refresh_token',
+        refresh_token: 'graph_refresh',
+        scope: 'https://service.flow.microsoft.com/.default offline_access'
+      });
+      expect(tokenStorage.tokens.flow_refresh_token).toBe('flow_refresh');
+      expect(tokenStorage.tokens.flow_expires_at).toBeGreaterThan(Date.now());
+      expect(tokenStorage.tokens.access_token).toBe('graph'); // Graph tokens untouched
+    });
+
+    it('prefers the Flow refresh token', async () => {
+      tokenStorage.tokens = { refresh_token: 'graph_refresh', flow_access_token: 'old', flow_refresh_token: 'flow_refresh', flow_expires_at: Date.now() - 1000 };
+      const postSpy = jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({ statusCode: 200, body: { access_token: 'f', expires_in: 3600 } });
+      jest.spyOn(tokenStorage, '_saveTokensToFile').mockResolvedValue();
+
+      await tokenStorage.getValidFlowAccessToken();
+      expect(postSpy.mock.calls[0][1].refresh_token).toBe('flow_refresh');
+    });
+
+    it('returns null when the Flow token cannot be obtained', async () => {
+      tokenStorage.tokens = { access_token: 'graph', refresh_token: 'r', expires_at: Date.now() + 3600000 };
+      jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({ statusCode: 400, body: { error: 'invalid_grant', error_description: 'No consent' } });
+      expect(await tokenStorage.getValidFlowAccessToken()).toBeNull();
+      expect(tokenStorage.tokens.access_token).toBe('graph'); // Graph sign-in kept
     });
   });
 

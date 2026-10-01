@@ -9,7 +9,7 @@ const path = require('path');
 
 jest.setTimeout(20000);
 
-test('initialize + tools/list yield only JSON-RPC lines on stdout', async () => {
+test('initialize, tools/list and tools/call yield only JSON-RPC lines on stdout', async () => {
   // Empty home directory: no token file is read or written from the real profile.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'outlook-mcp-smoke-'));
   const server = spawn(process.execPath, [path.join(__dirname, '..', 'index.js')], {
@@ -41,6 +41,8 @@ test('initialize + tools/list yield only JSON-RPC lines on stdout', async () => 
     // check-auth-status reads the (missing) token file: its logging must not reach stdout either.
     send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'check-auth-status', arguments: {} } });
     await waitFor(3);
+    send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'finns-inte', arguments: {} } });
+    await waitFor(4);
   } finally {
     server.kill();
     fs.rmSync(home, { recursive: true, force: true });
@@ -55,4 +57,8 @@ test('initialize + tools/list yield only JSON-RPC lines on stdout', async () => 
   expect(byId[1].result.serverInfo).toBeDefined();
   expect(byId[2].result.tools.map(t => t.name)).toEqual(expect.arrayContaining(['authenticate', 'check-auth-status', 'read-email', 'send-email']));
   expect(byId[3].result.content[0].text).toMatch(/^Not authenticated/);
+  // Unknown tool: a JSON-RPC error, not a result
+  expect(byId[4].result).toBeUndefined();
+  expect(byId[4].error.code).toBe(-32602);
+  expect(byId[4].error.message).toContain('finns-inte');
 });

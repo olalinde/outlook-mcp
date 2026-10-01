@@ -17,8 +17,8 @@ A comprehensive MCP (Model Context Protocol) server that connects Claude with Mi
 ├── config.js                # Configuration settings
 ├── auth/                    # Authentication modules
 │   ├── index.js             # Authentication exports
-│   ├── token-storage.js     # Graph token store, refresh and device code flow (used for Graph calls)
-│   ├── token-manager.js     # Flow tokens and test-mode tokens
+│   ├── token-storage.js     # Token store: device code flow, Graph and Flow token refresh
+│   ├── token-manager.js     # Test-mode tokens
 │   └── tools.js             # Auth-related tools
 ├── calendar/                # Calendar functionality
 │   ├── index.js             # Calendar exports
@@ -134,6 +134,10 @@ overwritten, and duplicate names within one message get `-1`, `-2` .... Returns 
 `{ id, subject, from, to, cc, sentDateTime, receivedDateTime, bodyContentType, body, attachments: [{ id, name, contentType, contentId, isInline, size }] }`,
 where `body` is the unmodified HTML. Note that this bypasses the prompt-injection sanitizing of the default text format.
 To find a sent message: `list-emails` with `folder: "sentitems"` (or `"sent"`) lists subjects and ids.
+Folder names may be paths such as `"Inbox/Projekt/2026"`. A default folder as the first part is found whatever its
+display name, in English or Swedish: Inbox/Inkorg, Sent Items/Skickat, Drafts/Utkast, Deleted Items/Borttaget,
+Archive/Arkiv, Junk/Skräppost. `search-emails` never returns non-matching emails: with no hits it says so, and hits that
+match only part of the criteria are labelled as such.
 
 ### OneDrive
 | Tool | Description |
@@ -162,9 +166,8 @@ To find a sent message: `list-emails` with `folder: "sentitems"` (or `"sent"`) l
 2. **Azure setup**: Register app in Azure Portal (see detailed steps below)
 3. **Configure environment**: Copy `.env.example` to `.env` and add your Azure credentials
 4. **Configure Claude**: Update your Claude Desktop config with the server path
-5. **Start auth server**: `npm run auth-server`
-6. **Authenticate**: Use the authenticate tool in Claude to get the OAuth URL
-7. **Start using**: Access your M365 data through Claude!
+5. **Authenticate**: Use the `authenticate` tool in Claude, or run `node scripts/login.mjs` (device code; no auth server needed)
+6. **Start using**: Access your M365 data through Claude!
 
 ## Installation
 
@@ -188,9 +191,10 @@ npm install
 3. Click "New registration"
 4. Name: "M365 MCP Server"
 5. Account type: "Accounts in any organizational directory and personal Microsoft accounts"
-6. Redirect URI: Web → `http://localhost:3333/auth/callback`
+6. Redirect URI: leave empty (sign-in uses the device code flow)
 7. Click "Register"
-8. Copy the "Application (client) ID" for your `.env` file
+8. Under **Authentication**, set **Allow public client flows** to **Yes** and save
+9. Copy the "Application (client) ID" for your `.env` file
 
 ### App Permissions
 
@@ -208,12 +212,7 @@ npm install
 - Requires additional Azure AD configuration with Flow API scope
 - See Power Automate section below for details
 
-### Client Secret
-
-1. Go to "Certificates & secrets" → "Client secrets"
-2. Click "New client secret"
-3. Add description and select expiration
-4. **Copy the VALUE** (not the Secret ID)
+No client secret is needed: the server is a public client and signs in with the device code flow.
 
 ## Configuration
 
@@ -227,16 +226,13 @@ Edit `.env`:
 ```bash
 # Get these values from Azure Portal > App Registrations > Your App
 MS_CLIENT_ID=your-application-client-id-here
-MS_CLIENT_SECRET=your-client-secret-VALUE-here
 MS_TENANT_ID=your-tenant-id-here
 USE_TEST_MODE=false
 ```
 
 **Important Notes:**
-- Use `MS_CLIENT_ID` and `MS_CLIENT_SECRET` in the `.env` file
+- Use `MS_CLIENT_ID` in the `.env` file (or `OUTLOOK_CLIENT_ID` in the Claude Desktop config)
 - Set `MS_TENANT_ID` for single-tenant apps to avoid `/common` endpoint errors
-- For Claude Desktop config, you'll use `OUTLOOK_CLIENT_ID` and `OUTLOOK_CLIENT_SECRET`
-- Always use the client secret **VALUE**, never the Secret ID
 
 ### 2. Claude Desktop Configuration
 
@@ -251,7 +247,7 @@ Add to your Claude Desktop config:
       "env": {
         "USE_TEST_MODE": "false",
         "OUTLOOK_CLIENT_ID": "your-client-id",
-        "OUTLOOK_CLIENT_SECRET": "your-client-secret"
+        "MS_TENANT_ID": "your-tenant-id"
       }
     }
   }
@@ -262,10 +258,13 @@ Add to your Claude Desktop config:
 
 ### Graph API (Outlook + OneDrive)
 
-1. Start auth server: `npm run auth-server`
-2. Use the `authenticate` tool in Claude
-3. Visit the provided URL and sign in
-4. Tokens saved to `~/.outlook-mcp-tokens.json`
+Sign-in uses the OAuth 2.0 device code flow; no auth server or client secret is needed.
+
+1. Use the `authenticate` tool in Claude (`force: true` signs in again from scratch), or run `node scripts/login.mjs`
+2. Open the URL shown, enter the code and sign in
+3. Tokens are saved to `~/.outlook-mcp-tokens.json`; `check-auth-status` confirms (and refreshes an expired access token)
+
+A running server picks up tokens that `scripts/login.mjs` (or another server) has written to the token file.
 
 ### Sign-in CLI (`scripts/login.mjs`)
 
@@ -296,7 +295,9 @@ App registrations → the app → **Authentication** → **Allow public client f
 
 ### Power Automate (Optional)
 
-Power Automate requires a separate token with the Flow API scope. Configure additional Azure AD permissions for `https://service.flow.microsoft.com//.default` scope.
+Power Automate uses a separate token for the Flow API scope (`https://service.flow.microsoft.com/.default`). Add the
+delegated Power Automate (Flow service) permission to the app registration. The Flow token is obtained and renewed
+with the refresh token from the normal sign-in, independently of the Graph token; no extra sign-in is needed.
 
 **Limitations:**
 - Only solution-aware flows are accessible
@@ -312,14 +313,8 @@ Power Automate requires a separate token with the Flow API scope. Configure addi
 npm install
 ```
 
-**"Port 3333 in use"**
-```bash
-npx kill-port 3333
-npm run auth-server
-```
-
-**"Invalid client secret" (AADSTS7000215)**
-- Use the secret **VALUE**, not the Secret ID
+**AADSTS7000218 / "client_assertion or client_secret" during sign-in**
+- Allow public client flows in the app registration (see "Requirement: public client flows" above)
 
 **"Authentication required"**
 - The refresh token no longer works: run `node scripts/login.mjs` (or the `authenticate` tool) to sign in again

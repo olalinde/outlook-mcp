@@ -61,122 +61,111 @@ async function handleSearchEmails(args) {
 }
 
 /**
- * Execute a search with progressively simpler fallback strategies
+ * Execute a search with progressively simpler fallback strategies.
+ * Never returns emails that don't match: when nothing matches the result is empty.
  * @param {string} endpoint - API endpoint
  * @param {string} accessToken - Access token
  * @param {object} searchTerms - Search terms (query, from, to, subject)
  * @param {object} filterTerms - Filter terms (hasAttachments, unreadOnly)
  * @param {number} maxCount - Maximum number of results to retrieve
- * @returns {Promise<object>} - Search results
+ * @returns {Promise<object>} - Search results ({ value: [] } when nothing matches)
+ * @throws {Error} - The last API error if every search attempt failed
  */
 async function progressiveSearch(endpoint, accessToken, searchTerms, filterTerms, maxCount) {
-  // Track search strategies attempted
-  const searchAttempts = [];
-  
+  const usedTerms = ['subject', 'from', 'to', 'query'].filter(term => searchTerms[term]);
+  let lastError = null;
+  let anySucceeded = false;
+
   // 1. Try combined search (most specific)
   try {
     const params = buildSearchParams(searchTerms, filterTerms, Math.min(50, maxCount));
     console.error("Attempting combined search with params:", params);
-    searchAttempts.push("combined-search");
-    
+
     const response = await callGraphAPIPaginated(accessToken, 'GET', endpoint, params, maxCount);
+    anySucceeded = true;
     if (response.value && response.value.length > 0) {
       console.error(`Combined search successful: found ${response.value.length} results`);
       return response;
     }
   } catch (error) {
+    lastError = error;
     console.error(`Combined search failed: ${error.message}`);
   }
-  
+
   // 2. Try each search term individually, starting with most specific
-  const searchPriority = ['subject', 'from', 'to', 'query'];
-  
-  for (const term of searchPriority) {
-    if (searchTerms[term]) {
-      try {
-        console.error(`Attempting search with only ${term}: "${searchTerms[term]}"`);
-        searchAttempts.push(`single-term-${term}`);
-        
-        // For single term search, only use $search with that term
-        // Graph API does not support $orderby or $filter with $search
-        const simplifiedParams = {
-          $top: Math.min(50, maxCount),
-          $select: config.EMAIL_SELECT_FIELDS
-        };
-        
-        // Build KQL terms for search
-        const kqlParts = [];
-        
-        // Add the search term in the appropriate KQL syntax
-        if (term === 'query') {
-          // General query doesn't need a prefix
-          kqlParts.push(searchTerms[term]);
-        } else {
-          // Specific field searches use field:value syntax
-          kqlParts.push(`${term}:${searchTerms[term]}`);
-        }
-        
-        // Add boolean filters as KQL (can't use $filter with $search)
-        addBooleanFiltersAsKQL(kqlParts, filterTerms);
-        
-        simplifiedParams.$search = `"${kqlParts.join(' ')}"`;
-        
-        const response = await callGraphAPIPaginated(accessToken, 'GET', endpoint, simplifiedParams, maxCount);
-        if (response.value && response.value.length > 0) {
-          console.error(`Search with ${term} successful: found ${response.value.length} results`);
-          return response;
-        }
-      } catch (error) {
-        console.error(`Search with ${term} failed: ${error.message}`);
+  for (const term of usedTerms) {
+    try {
+      console.error(`Attempting search with only ${term}: "${searchTerms[term]}"`);
+
+      // For single term search, only use $search with that term
+      // Graph API does not support $orderby or $filter with $search
+      const simplifiedParams = {
+        $top: Math.min(50, maxCount),
+        $select: config.EMAIL_SELECT_FIELDS
+      };
+
+      // Build KQL terms for search
+      const kqlParts = [];
+
+      // Add the search term in the appropriate KQL syntax
+      if (term === 'query') {
+        // General query doesn't need a prefix
+        kqlParts.push(searchTerms[term]);
+      } else {
+        // Specific field searches use field:value syntax
+        kqlParts.push(`${term}:${searchTerms[term]}`);
       }
+
+      // Add boolean filters as KQL (can't use $filter with $search)
+      addBooleanFiltersAsKQL(kqlParts, filterTerms);
+
+      simplifiedParams.$search = `"${kqlParts.join(' ')}"`;
+
+      const response = await callGraphAPIPaginated(accessToken, 'GET', endpoint, simplifiedParams, maxCount);
+      anySucceeded = true;
+      if (response.value && response.value.length > 0) {
+        console.error(`Search with ${term} successful: found ${response.value.length} results`);
+        if (usedTerms.length > 1) {
+          // Only part of the criteria matched: the result says so
+          response._searchInfo = { matchedOn: term, ignored: usedTerms.filter(t => t !== term) };
+        }
+        return response;
+      }
+    } catch (error) {
+      lastError = error;
+      console.error(`Search with ${term} failed: ${error.message}`);
     }
   }
-  
-  // 3. Try with only boolean filters
-  if (filterTerms.hasAttachments === true || filterTerms.unreadOnly === true) {
+
+  // 3. Without search terms, retry with only the boolean filters (step 1 may have failed)
+  if (usedTerms.length === 0 && (filterTerms.hasAttachments === true || filterTerms.unreadOnly === true)) {
     try {
       console.error("Attempting search with only boolean filters");
-      searchAttempts.push("boolean-filters-only");
-      
+
       const filterOnlyParams = {
         $top: Math.min(50, maxCount),
         $select: config.EMAIL_SELECT_FIELDS,
         $orderby: 'receivedDateTime desc'
       };
-      
+
       // Add the boolean filters
       addBooleanFilters(filterOnlyParams, filterTerms);
-      
+
       const response = await callGraphAPIPaginated(accessToken, 'GET', endpoint, filterOnlyParams, maxCount);
       console.error(`Boolean filter search found ${response.value?.length || 0} results`);
       return response;
     } catch (error) {
+      lastError = error;
       console.error(`Boolean filter search failed: ${error.message}`);
     }
   }
-  
-  // 4. Final fallback: just get recent emails with pagination
-  console.error("All search strategies failed, falling back to recent emails");
-  searchAttempts.push("recent-emails");
-  
-  const basicParams = {
-    $top: Math.min(50, maxCount),
-    $select: config.EMAIL_SELECT_FIELDS,
-    $orderby: 'receivedDateTime desc'
-  };
-  
-  const response = await callGraphAPIPaginated(accessToken, 'GET', endpoint, basicParams, maxCount);
-  console.error(`Fallback to recent emails found ${response.value?.length || 0} results`);
-  
-  // Add a note to the response about the search attempts
-  response._searchInfo = {
-    attemptsCount: searchAttempts.length,
-    strategies: searchAttempts,
-    originalTerms: searchTerms,
-    filterTerms: filterTerms
-  };
-  
-  return response;
+
+  // Nothing matched. Report API errors instead of hiding them behind "no results".
+  if (!anySucceeded && lastError) {
+    throw lastError;
+  }
+  console.error("No emails matched the search");
+  return { value: [] };
 }
 
 /**
@@ -290,16 +279,21 @@ function formatSearchResults(response) {
     return `${index + 1}. ${readStatus}${date} - From: ${sender.name} (${sender.address})\nSubject: ${email.subject}\nID: ${email.id}\n`;
   }).join("\n");
   
-  // Add search strategy info if available
-  let additionalInfo = '';
+  // Only part of the criteria matched
   if (response._searchInfo) {
-    additionalInfo = `\n(Search used ${response._searchInfo.strategies[response._searchInfo.strategies.length - 1]} strategy)`;
+    const { matchedOn, ignored } = response._searchInfo;
+    return {
+      content: [{
+        type: "text",
+        text: `No emails matched all search criteria. Found ${response.value.length} emails matching only "${matchedOn}" (ignored: ${ignored.join(', ')}):\n\n${emailList}`
+      }]
+    };
   }
-  
+
   return {
     content: [{ 
       type: "text", 
-      text: `Found ${response.value.length} emails matching your search criteria:${additionalInfo}\n\n${emailList}`
+      text: `Found ${response.value.length} emails matching your search criteria:\n\n${emailList}`
     }]
   };
 }

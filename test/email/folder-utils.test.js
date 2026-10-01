@@ -214,3 +214,60 @@ describe('getFolderIdByName', () => {
     expect(callGraphAPI).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('well-known folders in names and paths', () => {
+  const mockAccessToken = 'dummy_access_token';
+
+  beforeEach(() => {
+    callGraphAPI.mockReset();
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    console.error.mockRestore();
+  });
+
+  test.each([
+    ['Inbox/Sub', 'inbox'],
+    ['Inkorg/Sub', 'inbox'],
+    ['Skickat/Sub', 'sentitems'],
+    ['Sent Items/Sub', 'sentitems'],
+    ['Utkast/Sub', 'drafts'],
+    ['Borttaget/Sub', 'deleteditems'],
+    ['Arkiv/Sub', 'archive'],
+    ['Skräppost/Sub', 'junkemail']
+  ])('"%s" starts from the well-known folder %s', async (folderPath, wellKnown) => {
+    callGraphAPI
+      .mockResolvedValueOnce({ id: 'root-id' })                              // well-known folder
+      .mockResolvedValueOnce({ value: [{ id: 'sub-id', displayName: 'Sub' }] }); // child lookup
+
+    const result = await getFolderIdByName(mockAccessToken, folderPath);
+
+    expect(result).toBe('sub-id');
+    expect(callGraphAPI.mock.calls[0][2]).toBe(`me/mailFolders/${wellKnown}`);
+    expect(callGraphAPI.mock.calls[1][2]).toBe('me/mailFolders/root-id/childFolders');
+    expect(callGraphAPI.mock.calls[1][4].$filter).toBe("displayName eq 'Sub'");
+  });
+
+  test('a simple well-known name returns the real folder id', async () => {
+    callGraphAPI.mockResolvedValueOnce({ id: 'archive-id' });
+    expect(await getFolderIdByName(mockAccessToken, 'Arkiv')).toBe('archive-id');
+    expect(callGraphAPI).toHaveBeenCalledTimes(1);
+    expect(callGraphAPI.mock.calls[0][2]).toBe('me/mailFolders/archive');
+  });
+
+  test('list-emails folder "Inkorg/Sub" resolves to the subfolder', async () => {
+    callGraphAPI
+      .mockResolvedValueOnce({ id: 'root-id' })
+      .mockResolvedValueOnce({ value: [{ id: 'sub-id', displayName: 'Sub' }] });
+    expect(await resolveFolderPath(mockAccessToken, 'Inkorg/Sub')).toBe('me/mailFolders/sub-id/messages');
+  });
+
+  test('other paths still start at the mailbox root', async () => {
+    callGraphAPI
+      .mockResolvedValueOnce({ value: [{ id: 'p-id', displayName: 'Projekt' }] })
+      .mockResolvedValueOnce({ value: [{ id: 'sub-id', displayName: 'Sub' }] });
+    expect(await getFolderIdByName(mockAccessToken, 'Projekt/Sub')).toBe('sub-id');
+    expect(callGraphAPI.mock.calls[0][2]).toBe('me/mailFolders');
+  });
+});

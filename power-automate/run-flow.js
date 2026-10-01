@@ -2,7 +2,7 @@
  * Power Automate run/trigger flow functionality
  */
 const { callFlowAPI } = require('./flow-api');
-const { getFlowAccessToken } = require('../auth/token-manager');
+const { getFlowAccessToken } = require('../auth');
 
 /**
  * Run flow handler
@@ -24,7 +24,7 @@ async function handleRunFlow(args) {
   }
 
   try {
-    const accessToken = getFlowAccessToken();
+    const accessToken = await getFlowAccessToken();
 
     if (!accessToken) {
       return {

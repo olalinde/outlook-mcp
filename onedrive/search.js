@@ -26,8 +26,8 @@ async function handleSearchFiles(args) {
   try {
     const accessToken = await ensureAuthenticated();
 
-    // Use the search endpoint
-    const endpoint = `me/drive/search(q='${encodeURIComponent(query)}')`;
+    // Use the search endpoint; ' inside the OData string literal is escaped as ''
+    const endpoint = `me/drive/search(q='${encodeURIComponent(query.replace(/'/g, "''"))}')`;
 
     const queryParams = {
       $top: Math.min(50, count),

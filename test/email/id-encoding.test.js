@@ -85,9 +85,9 @@ describe('ids in Graph URLs are encoded exactly once', () => {
 
   test('move-emails', async () => {
     callGraphAPI
-      .mockResolvedValueOnce({ value: [{ id: 'target', displayName: 'Arkiv' }] }) // folder lookup
+      .mockResolvedValueOnce({ value: [{ id: 'target', displayName: 'Projekt' }] }) // folder lookup
       .mockResolvedValue({});
-    await handleMoveEmails({ emailIds: RAW_ID, targetFolder: 'Arkiv' });
+    await handleMoveEmails({ emailIds: RAW_ID, targetFolder: 'Projekt' });
     expect(endpoints()).toContain(`me/messages/${ENCODED_ID}/move`);
   });
 

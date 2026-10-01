@@ -6,11 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `npm install` - **ALWAYS run first** to install dependencies
 - `npm start` - Start the MCP server
-- `npm run auth-server` - Start the OAuth authentication server on port 3333 (**required for authentication**)
+- `node scripts/login.mjs` - Sign in with the device code flow (JSON lines on stdout); `--status` shows sign-in status
 - `npm run test-mode` - Start the server in test mode with mock data
 - `npm run inspect` - Use MCP Inspector to test the server interactively
 - `npm test` - Run Jest tests
-- `npx kill-port 3333` - Kill process using port 3333 if auth server won't start
 
 ## Architecture Overview
 
@@ -22,7 +21,7 @@ This is a modular MCP (Model Context Protocol) server that provides Claude with 
 ### Core Structure
 - `index.js` - Main entry point that combines all module tools and handles MCP protocol
 - `config.js` - Centralized configuration (API endpoints, scopes, field selections)
-- `outlook-auth-server.js` - Standalone OAuth server for authentication flow
+- `scripts/login.mjs` - Sign-in CLI (device code flow) using the same token store as the server
 
 ### Modules
 Each module exports tools and handlers:
@@ -45,28 +44,28 @@ Each module exports tools and handlers:
 ## Authentication
 
 ### Graph API (Outlook + OneDrive)
-1. Azure app registration required with permissions:
+1. Azure app registration (public client, no client secret) with **Allow public client flows** = Yes and delegated permissions:
    - `Mail.Read`, `Mail.ReadWrite`, `Mail.Send`
    - `Calendars.Read`, `Calendars.ReadWrite`
    - `Files.Read`, `Files.ReadWrite`
    - `User.Read`, `offline_access`
-2. Start auth server: `npm run auth-server`
-3. Use authenticate tool to get OAuth URL
-4. Complete browser authentication
-5. Tokens automatically stored and refreshed
+2. Sign in with the device code flow: the `authenticate` tool (returns URL + code) or `node scripts/login.mjs`.
+   No auth server is needed.
+3. Tokens are stored in `~/.outlook-mcp-tokens.json` and refreshed automatically (`auth/token-storage.js`);
+   a running server re-reads the file when another process has written new tokens.
 
 ### Power Automate (Optional)
-- Requires separate Flow API scope: `https://service.flow.microsoft.com//.default`
-- Flow tokens stored alongside Graph tokens in same token file
+- Requires the Flow API scope `https://service.flow.microsoft.com/.default` in the app registration
+- The Flow token is obtained/renewed with the refresh token (independent of the Graph token) and stored in the same token file
 - Only solution-aware flows accessible via API
 - Only manual trigger flows can be triggered
 
 ## Configuration
 
 ### Environment Variables
-- **For .env file**: Use `MS_CLIENT_ID` and `MS_CLIENT_SECRET`
-- **For Claude Desktop config**: Use `OUTLOOK_CLIENT_ID` and `OUTLOOK_CLIENT_SECRET`
-- **Important**: Always use the client secret VALUE from Azure, not the Secret ID
+- **For .env file**: Use `MS_CLIENT_ID` (and `MS_TENANT_ID` for single-tenant apps)
+- **For Claude Desktop config**: Use `OUTLOOK_CLIENT_ID`
+- No client secret: the server is a public client
 
 ### Config Constants
 - `GRAPH_API_ENDPOINT`: `https://graph.microsoft.com/v1.0/`
@@ -76,9 +75,8 @@ Each module exports tools and handlers:
 
 ### Common Setup Issues
 1. **Missing dependencies**: Always run `npm install` first
-2. **Wrong secret**: Use Azure secret VALUE, not ID (AADSTS7000215 error)
-3. **Auth server not running**: Start `npm run auth-server` before authenticating
-4. **Port conflicts**: Use `npx kill-port 3333` if port is in use
+2. **AADSTS7000218 at sign-in**: Allow public client flows in the app registration
+3. **stdout is the MCP stream**: log with `console.error`, never `console.log`, in server code
 
 ## Test Mode
 

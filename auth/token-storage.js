@@ -2,6 +2,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const https = require('https');
 const querystring = require('querystring');
+const { FLOW_SCOPE } = require('../config');
 
 class TokenStorage {
   constructor(config) {
@@ -23,6 +24,7 @@ class TokenStorage {
       ...config // Allow overriding default config
     };
     this.tokens = null;
+    this._fileMtimeMs = null; // mtime of the token file when last read or written
     this._loadPromise = null;
     this._refreshPromise = null;
 
@@ -128,6 +130,7 @@ class TokenStorage {
     try {
       const tokenData = await fs.readFile(this.config.tokenStorePath, 'utf8');
       this.tokens = JSON.parse(tokenData);
+      this._fileMtimeMs = await this._fileMtime();
       console.error('Tokens loaded from file.');
       return this.tokens;
     } catch (error) {
@@ -148,11 +151,34 @@ class TokenStorage {
     }
     try {
       await fs.writeFile(this.config.tokenStorePath, JSON.stringify(this.tokens, null, 2), { mode: 0o600 });
+      this._fileMtimeMs = await this._fileMtime();
       console.error('Tokens saved successfully.');
       // return true; // No longer returning boolean, will throw on error.
     } catch (error) {
       console.error('Error saving token cache:', error);
       throw error; // Propagate the error
+    }
+  }
+
+  /** @returns {Promise<number|null>} - mtime of the token file, or null if it can't be read */
+  async _fileMtime() {
+    try {
+      const stat = await fs.stat(this.config.tokenStorePath);
+      return stat ? stat.mtimeMs : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Re-reads the token file if another process (scripts/login.mjs, another server
+   * instance) has written it since this instance read or wrote it.
+   */
+  async _reloadIfFileChanged() {
+    const mtimeMs = await this._fileMtime();
+    if (mtimeMs !== null && mtimeMs !== this._fileMtimeMs) {
+      console.error('Token file changed on disk. Reloading tokens.');
+      await this._loadTokensFromFile();
     }
   }
 
@@ -182,6 +208,9 @@ class TokenStorage {
 
   async getValidAccessToken() {
     await this.getTokens(); // Ensure tokens are loaded
+    if (!this.tokens || !this.tokens.access_token || this.isTokenExpired()) {
+      await this._reloadIfFileChanged(); // A new sign-in may have been saved by another process
+    }
 
     if (!this.tokens || !this.tokens.access_token) {
       console.error('No access token available.');
@@ -285,6 +314,58 @@ class TokenStorage {
     });
 
     return this._refreshPromise.then(tokens => tokens.access_token);
+  }
+
+  /**
+   * Returns a valid Power Automate (Flow API) access token, or null.
+   * The Flow token has its own expiry and is renewed independently of the Graph token,
+   * by redeeming the Flow refresh token (or else the Graph refresh token) for the Flow scope.
+   * @returns {Promise<string|null>}
+   */
+  async getValidFlowAccessToken() {
+    await this.getTokens();
+    const isFlowValid = () => !!(this.tokens && this.tokens.flow_access_token && this.tokens.flow_expires_at &&
+      Date.now() < this.tokens.flow_expires_at - this.config.refreshTokenBuffer);
+
+    if (!isFlowValid()) {
+      await this._reloadIfFileChanged();
+    }
+    if (!this.tokens) {
+      return null;
+    }
+    if (isFlowValid()) {
+      return this.tokens.flow_access_token;
+    }
+
+    const refreshToken = this.tokens.flow_refresh_token || this.tokens.refresh_token;
+    if (!refreshToken) {
+      console.error('No refresh token available for the Flow API.');
+      return null;
+    }
+
+    try {
+      const { statusCode, body } = await this._httpPostForm(this.config.tokenEndpoint, {
+        client_id: this.config.clientId,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        scope: `${FLOW_SCOPE} offline_access`
+      });
+      if (statusCode < 200 || statusCode >= 300 || !body.access_token) {
+        console.error(`Flow token request failed: ${body.error_description || `status ${statusCode}`}`);
+        return null;
+      }
+      this.tokens.flow_access_token = body.access_token;
+      if (body.refresh_token) {
+        this.tokens.flow_refresh_token = body.refresh_token;
+      }
+      this.tokens.flow_expires_at = Date.now() + (body.expires_in * 1000);
+      await this._saveTokensToFile();
+      console.error('Flow access token obtained and saved.');
+      return this.tokens.flow_access_token;
+    } catch (error) {
+      console.error(`Flow token request failed: ${error.message}`);
+      return null;
+    }
   }
 
   // Utility to clear tokens, e.g., for logout or forcing re-auth

@@ -23,6 +23,34 @@ const WELL_KNOWN_FOLDERS = {
 };
 
 /**
+ * Display names (English and Swedish, lower case) of the default folders and
+ * their Graph well-known folder names, which work in place of a folder id.
+ * Lets "Inbox/Sub" resolve in a mailbox where the inbox is called "Inkorg".
+ */
+const WELL_KNOWN_FOLDER_NAMES = {
+  'inbox': 'inbox',
+  'inkorg': 'inbox',
+  'sent': 'sentitems',
+  'sentitems': 'sentitems',
+  'sent items': 'sentitems',
+  'skickat': 'sentitems',
+  'skickade objekt': 'sentitems',
+  'drafts': 'drafts',
+  'utkast': 'drafts',
+  'deleted': 'deleteditems',
+  'deleteditems': 'deleteditems',
+  'deleted items': 'deleteditems',
+  'borttaget': 'deleteditems',
+  'borttagna objekt': 'deleteditems',
+  'archive': 'archive',
+  'arkiv': 'archive',
+  'junk': 'junkemail',
+  'junkemail': 'junkemail',
+  'junk email': 'junkemail',
+  'skräppost': 'junkemail'
+};
+
+/**
  * Resolve a folder name to its endpoint path
  * @param {string} accessToken - Access token
  * @param {string} folderName - Folder name to resolve
@@ -100,6 +128,23 @@ async function getChildFolderIdByName(accessToken, parentFolderId, name) {
 }
 
 /**
+ * Get the real ID of a default folder from its Graph well-known name.
+ * (Message moves accept well-known names, but e.g. rule actions need the ID.)
+ * @param {string} accessToken - Access token
+ * @param {string} wellKnownName - e.g. "inbox", "sentitems"
+ * @returns {Promise<string|null>} - Folder ID or null if not found
+ */
+async function getWellKnownFolderId(accessToken, wellKnownName) {
+  try {
+    const folder = await callGraphAPI(accessToken, 'GET', `me/mailFolders/${wellKnownName}`, null, { $select: 'id' });
+    return (folder && folder.id) || null;
+  } catch (error) {
+    console.error(`Error finding well-known folder "${wellKnownName}": ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Get the ID of a mail folder by its name or path.
  * Supports path notation like "Inbox/2024/Viktigt" to resolve nested folders.
  * @param {string} accessToken - Access token
@@ -113,8 +158,13 @@ async function getFolderIdByName(accessToken, folderName) {
     // Path notation: resolve each segment in turn
     if (folderName.includes('/')) {
       const parts = folderName.split('/').map(p => p.trim()).filter(Boolean);
-      let currentId = null;
-      for (const part of parts) {
+      // A default folder as the first segment ("Inbox", "Inkorg", ...) is found by its well-known name
+      const wellKnownRoot = WELL_KNOWN_FOLDER_NAMES[(parts[0] || '').toLowerCase()];
+      let currentId = wellKnownRoot ? await getWellKnownFolderId(accessToken, wellKnownRoot) : null;
+      if (wellKnownRoot && !currentId) {
+        return null;
+      }
+      for (const part of wellKnownRoot ? parts.slice(1) : parts) {
         currentId = await getChildFolderIdByName(accessToken, currentId, part);
         if (!currentId) {
           console.error(`Path segment "${part}" not found`);
@@ -125,7 +175,11 @@ async function getFolderIdByName(accessToken, folderName) {
       return currentId;
     }
 
-    // Simple name: search root-level folders
+    // Simple name: a default folder, or search root-level folders
+    const wellKnown = WELL_KNOWN_FOLDER_NAMES[folderName.trim().toLowerCase()];
+    if (wellKnown) {
+      return await getWellKnownFolderId(accessToken, wellKnown);
+    }
     const id = await getChildFolderIdByName(accessToken, null, folderName);
     if (id) {
       console.error(`Found folder "${folderName}" with ID: ${id}`);
@@ -197,6 +251,7 @@ async function getAllFolders(accessToken) {
 
 module.exports = {
   WELL_KNOWN_FOLDERS,
+  WELL_KNOWN_FOLDER_NAMES,
   resolveFolderPath,
   getFolderIdByName,
   getChildFolderIdByName,

@@ -8,6 +8,7 @@
  */
 const { Server } = require("@modelcontextprotocol/sdk/server/index.js");
 const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
+const { McpError, ErrorCode } = require("@modelcontextprotocol/sdk/types.js");
 const config = require('./config');
 
 // Import module tools
@@ -83,51 +84,34 @@ server.fallbackRequestHandler = async (request) => {
     
     // Tool call handler
     if (method === "tools/call") {
+      const { name, arguments: args = {} } = params || {};
+
+      console.error(`TOOL CALL: ${name}`);
+
+      // Find the tool handler; an unknown tool is a JSON-RPC error
+      const tool = TOOLS.find(t => t.name === name);
+      if (!tool || !tool.handler) {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
+      }
+
       try {
-        const { name, arguments: args = {} } = params || {};
-        
-        console.error(`TOOL CALL: ${name}`);
-        
-        // Find the tool handler
-        const tool = TOOLS.find(t => t.name === name);
-        
-        if (tool && tool.handler) {
-          return await tool.handler(args);
-        }
-        
-        // Tool not found
-        return {
-          error: {
-            code: -32601,
-            message: `Tool not found: ${name}`
-          }
-        };
+        return await tool.handler(args);
       } catch (error) {
+        // A failing tool is reported as a tool result with isError (MCP convention)
         console.error(`Error in tools/call:`, error);
         return {
-          error: {
-            code: -32603,
-            message: `Error processing tool call: ${error.message}`
-          }
+          content: [{ type: "text", text: `Error processing tool call: ${error.message}` }],
+          isError: true
         };
       }
     }
-    
+
     // For any other method, return method not found
-    return {
-      error: {
-        code: -32601,
-        message: `Method not found: ${method}`
-      }
-    };
+    throw new McpError(ErrorCode.MethodNotFound, `Method not found: ${method}`);
   } catch (error) {
+    // The SDK turns a thrown error into a JSON-RPC error response
     console.error(`Error in fallbackRequestHandler:`, error);
-    return {
-      error: {
-        code: -32603,
-        message: `Error processing request: ${error.message}`
-      }
-    };
+    throw error;
   }
 };
 

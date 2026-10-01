@@ -1,6 +1,7 @@
 /**
  * Authentication module for Outlook MCP server
  */
+const config = require('../config');
 const tokenManager = require('./token-manager');
 const { authTools, tokenStorage } = require('./tools');
 
@@ -25,8 +26,20 @@ async function ensureAuthenticated(forceNew = false) {
   return accessToken;
 }
 
+/**
+ * Returns a valid Power Automate (Flow API) access token, or null if none can be obtained.
+ * @returns {Promise<string|null>}
+ */
+async function getFlowAccessToken() {
+  if (config.USE_TEST_MODE) {
+    return tokenManager.getAccessToken(); // test_access_token_..., simulated by callFlowAPI
+  }
+  return tokenStorage.getValidFlowAccessToken();
+}
+
 module.exports = {
   tokenManager,
+  getFlowAccessToken,
   authTools,
   ensureAuthenticated
 };
