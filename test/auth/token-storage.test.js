@@ -44,10 +44,10 @@ describe('TokenStorage', () => {
       expect(tokenStorage.config.refreshTokenBuffer).toBe(5 * 60 * 1000);
     });
 
-    it('should warn if client ID or secret is missing', () => {
+    it('should warn if client ID is missing', () => {
       const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
       new TokenStorage({ ...baseConfig, clientId: null });
-      expect(consoleWarnSpy).toHaveBeenCalledWith("TokenStorage: MS_CLIENT_ID or MS_CLIENT_SECRET is not configured. Token operations might fail.");
+      expect(consoleWarnSpy).toHaveBeenCalledWith("TokenStorage: MS_CLIENT_ID is not configured. Authentication will fail.");
       consoleWarnSpy.mockRestore();
     });
   });
@@ -63,13 +63,13 @@ describe('TokenStorage', () => {
     });
 
     it('should return null and log if file does not exist (ENOENT)', async () => {
-      const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
       fs.readFile.mockRejectedValue({ code: 'ENOENT' });
       const loaded = await tokenStorage._loadTokensFromFile();
       expect(loaded).toBeNull();
       expect(tokenStorage.tokens).toBeNull();
-      expect(consoleLogSpy).toHaveBeenCalledWith('Token file not found. No tokens loaded.');
-      consoleLogSpy.mockRestore();
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Token file not found. No tokens loaded.');
+      consoleErrorSpy.mockRestore();
     });
 
     it('should return null and log error for other read errors', async () => {
@@ -179,116 +179,65 @@ describe('TokenStorage', () => {
     });
   });
 
-  describe('exchangeCodeForTokens', () => {
-    let mockHttpsRequest;
-    const mockAuthCode = 'auth_code_123';
+  describe('startDeviceCode', () => {
+    it('should request a device code with client ID and scopes', async () => {
+      const deviceCodeResponse = { user_code: 'ABC123', device_code: 'dev_code', verification_uri: 'https://microsoft.com/devicelogin', expires_in: 900, interval: 5 };
+      const postSpy = jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({ statusCode: 200, body: deviceCodeResponse });
 
-    beforeEach(() => {
-        mockHttpsRequest = {
-            on: jest.fn((event, cb) => {
-                if (event === 'error') mockHttpsRequest.errorHandler = cb;
-                return mockHttpsRequest;
-            }),
-            write: jest.fn(),
-            end: jest.fn(),
-        };
-        https.request.mockImplementation((url, options, callback) => {
-            mockHttpsRequest.callback = callback; // Store the callback for triggering
-            return mockHttpsRequest;
-        });
+      const result = await tokenStorage.startDeviceCode();
+
+      expect(result).toEqual(deviceCodeResponse);
+      expect(postSpy).toHaveBeenCalledWith(tokenStorage.config.deviceCodeEndpoint, {
+        client_id: baseConfig.clientId,
+        scope: 'test_scope'
+      });
     });
 
-    const mockSuccessfulTokenResponse = {
-        access_token: 'new_access_token',
-        refresh_token: 'new_refresh_token',
-        expires_in: 3600,
-        scope: 'test_scope',
-        token_type: 'Bearer'
-    };
+    it('should reject with the error description on an API error', async () => {
+      jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({ statusCode: 400, body: { error: 'invalid_client', error_description: 'Bad client' } });
+      await expect(tokenStorage.startDeviceCode()).rejects.toThrow('Bad client');
+    });
 
-    it('should successfully exchange code for tokens and save them', async () => {
-      const saveSpy = jest.spyOn(tokenStorage, '_saveTokensToFile');
+    it('should reject if client ID is missing', async () => {
+      tokenStorage.config.clientId = null;
+      await expect(tokenStorage.startDeviceCode())
+        .rejects.toThrow('MS_CLIENT_ID is not configured. Cannot start device code flow.');
+    });
+  });
 
-      // Start the exchange process
-      const exchangePromise = tokenStorage.exchangeCodeForTokens(mockAuthCode);
+  describe('pollDeviceCode', () => {
+    const tokenResponse = { access_token: 'new_access_token', refresh_token: 'new_refresh_token', expires_in: 3600, scope: 'test_scope', token_type: 'Bearer' };
+    const interval = 0.001; // seconds, keeps the polling loop fast
 
-      // Simulate successful HTTPS response
-      const mockRes = {
-        statusCode: 200,
-        on: (event, cb) => {
-          if (event === 'data') cb(Buffer.from(JSON.stringify(mockSuccessfulTokenResponse)));
-          if (event === 'end') cb();
-        }
-      };
-      mockHttpsRequest.callback(mockRes); // Trigger the https.request callback
+    it('should keep polling while authorization is pending, then save the tokens', async () => {
+      const postSpy = jest.spyOn(tokenStorage, '_httpPostForm')
+        .mockResolvedValueOnce({ statusCode: 400, body: { error: 'authorization_pending' } })
+        .mockResolvedValueOnce({ statusCode: 200, body: tokenResponse });
+      const saveSpy = jest.spyOn(tokenStorage, '_saveTokensToFile').mockResolvedValue();
 
-      const tokens = await exchangePromise;
+      const tokens = await tokenStorage.pollDeviceCode('dev_code', interval, 60);
 
-      expect(https.request).toHaveBeenCalledTimes(1);
-      const requestArgs = https.request.mock.calls[0];
-      expect(requestArgs[0]).toBe(baseConfig.tokenEndpoint); // URL
-      expect(requestArgs[1].method).toBe('POST'); // options
-
-      const requestBody = querystring.parse(mockHttpsRequest.write.mock.calls[0][0]);
-      expect(requestBody.grant_type).toBe('authorization_code');
-      expect(requestBody.code).toBe(mockAuthCode);
-      expect(requestBody.client_id).toBe(baseConfig.clientId);
-
+      expect(postSpy).toHaveBeenCalledTimes(2);
+      expect(postSpy).toHaveBeenLastCalledWith(baseConfig.tokenEndpoint, {
+        client_id: baseConfig.clientId,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: 'dev_code'
+      });
       expect(tokens.access_token).toBe('new_access_token');
-      expect(tokenStorage.tokens.access_token).toBe('new_access_token');
+      expect(tokenStorage.tokens.refresh_token).toBe('new_refresh_token');
       expect(tokenStorage.tokens.expires_at).toBeGreaterThan(Date.now());
       expect(saveSpy).toHaveBeenCalled();
     });
 
-    it('should reject if saving exchanged token fails', async () => {
-      const saveError = new Error('Disk space full');
-      // Mock _saveTokensToFile to throw this error
-      jest.spyOn(tokenStorage, '_saveTokensToFile').mockRejectedValueOnce(saveError);
-
-      const exchangePromise = tokenStorage.exchangeCodeForTokens(mockAuthCode);
-      const mockRes = { // Simulate successful API response
-          statusCode: 200,
-          on: (event, cb) => {
-              if (event === 'data') cb(Buffer.from(JSON.stringify(mockSuccessfulTokenResponse)));
-              if (event === 'end') cb();
-          }
-      };
-      mockHttpsRequest.callback(mockRes);
-
-      await expect(exchangePromise).rejects.toThrow(`Tokens exchanged but failed to save: ${saveError.message}`);
-      // Check that tokens were updated in memory before save attempt
-      expect(tokenStorage.tokens.access_token).toBe(mockSuccessfulTokenResponse.access_token);
+    it('should reject when the user declines or the code expires', async () => {
+      jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({ statusCode: 400, body: { error: 'expired_token', error_description: 'Code expired' } });
+      await expect(tokenStorage.pollDeviceCode('dev_code', interval, 60)).rejects.toThrow('Code expired');
     });
 
-    it('should reject on token exchange API error', async () => {
-        const errorResponse = { error: 'invalid_grant', error_description: 'Bad auth code' };
-        const exchangePromise = tokenStorage.exchangeCodeForTokens(mockAuthCode);
-        const mockRes = {
-            statusCode: 400,
-            on: (event, cb) => {
-                if (event === 'data') cb(Buffer.from(JSON.stringify(errorResponse)));
-                if (event === 'end') cb();
-            }
-        };
-        mockHttpsRequest.callback(mockRes);
-
-        await expect(exchangePromise).rejects.toThrow(errorResponse.error_description);
-    });
-
-    it('should reject on network error during token exchange', async () => {
-        const networkError = new Error('Network fail');
-        const exchangePromise = tokenStorage.exchangeCodeForTokens(mockAuthCode);
-
-        // Simulate network error by calling the 'error' handler on the request object
-        mockHttpsRequest.errorHandler(networkError);
-
-        await expect(exchangePromise).rejects.toThrow('Network fail');
-    });
-
-    it('should reject if client ID or secret is missing', async () => {
-        tokenStorage.config.clientId = null;
-        await expect(tokenStorage.exchangeCodeForTokens(mockAuthCode))
-            .rejects.toThrow("Client ID or Client Secret is not configured. Cannot exchange code for tokens.");
+    it('should reject if saving the tokens fails', async () => {
+      jest.spyOn(tokenStorage, '_httpPostForm').mockResolvedValue({ statusCode: 200, body: tokenResponse });
+      jest.spyOn(tokenStorage, '_saveTokensToFile').mockRejectedValue(new Error('Disk space full'));
+      await expect(tokenStorage.pollDeviceCode('dev_code', interval, 60)).rejects.toThrow('Disk space full');
     });
   });
 
@@ -541,12 +490,12 @@ describe('TokenStorage', () => {
 
     it('should log if token file does not exist during unlink', async () => {
       fs.unlink.mockRejectedValue({ code: 'ENOENT' });
-      const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
       await tokenStorage.clearTokens();
 
-      expect(consoleLogSpy).toHaveBeenCalledWith('Token file not found, nothing to delete.');
-      consoleLogSpy.mockRestore();
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Token file not found, nothing to delete.');
+      consoleErrorSpy.mockRestore();
     });
 
     it('should log error for other unlink errors', async () => {

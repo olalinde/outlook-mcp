@@ -1,7 +1,7 @@
 /**
  * OneDrive create sharing link functionality
  */
-const { callGraphAPI } = require('../utils/graph-api');
+const { callGraphAPI, encodePathSegments } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 
 /**
@@ -33,7 +33,7 @@ async function handleShare(args) {
 
     if (!resolvedItemId && path) {
       const normalizedPath = path.replace(/^\/+|\/+$/g, '');
-      const itemEndpoint = `me/drive/root:/${normalizedPath}`;
+      const itemEndpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}`;
       const itemResponse = await callGraphAPI(accessToken, 'GET', itemEndpoint);
 
       if (!itemResponse || !itemResponse.id) {
@@ -50,7 +50,7 @@ async function handleShare(args) {
     }
 
     // Create the sharing link
-    const endpoint = `me/drive/items/${resolvedItemId}/createLink`;
+    const endpoint = `me/drive/items/${encodeURIComponent(resolvedItemId)}/createLink`;
     const body = {
       type: type,
       scope: scope

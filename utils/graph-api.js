@@ -6,10 +6,20 @@ const config = require('../config');
 const mockData = require('./mock-data');
 
 /**
+ * Encodes each segment of a slash-separated path (e.g. a OneDrive file path),
+ * keeping the slashes as separators.
+ * @param {string} path - Unencoded path such as "Documents/My file.txt"
+ * @returns {string} - Encoded path
+ */
+function encodePathSegments(path) {
+  return path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+}
+
+/**
  * Makes a request to the Microsoft Graph API
  * @param {string} accessToken - The access token for authentication
  * @param {string} method - HTTP method (GET, POST, etc.)
- * @param {string} path - API endpoint path
+ * @param {string} path - API endpoint path, already URL-encoded (or a full nextLink URL)
  * @param {object} data - Data to send for POST/PUT requests
  * @param {object} queryParams - Query parameters
  * @returns {Promise<object>} - The API response
@@ -31,12 +41,9 @@ async function callGraphAPI(accessToken, method, path, data = null, queryParams 
       finalUrl = path;
       console.error(`Using full URL from nextLink: ${finalUrl}`);
     } else {
-      // Build URL from path and queryParams
-      // Encode path segments properly
-      const encodedPath = path.split('/')
-        .map(segment => encodeURIComponent(segment))
-        .join('/');
-      
+      // Build URL from path and queryParams.
+      // The path is used as-is: callers encode ids (encodeURIComponent) and
+      // user-supplied paths (encodePathSegments) exactly once.
       // Build query string from parameters with special handling for OData filters
       let queryString = '';
       if (Object.keys(queryParams).length > 0) {
@@ -70,7 +77,7 @@ async function callGraphAPI(accessToken, method, path, data = null, queryParams 
         console.error(`Query string: ${queryString}`);
       }
       
-      finalUrl = `${config.GRAPH_API_ENDPOINT}${encodedPath}${queryString}`;
+      finalUrl = `${config.GRAPH_API_ENDPOINT}${path}${queryString}`;
       console.error(`Full URL: ${finalUrl}`);
     }
     
@@ -255,6 +262,7 @@ async function callGraphAPIDownload(accessToken, path) {
 }
 
 module.exports = {
+  encodePathSegments,
   callGraphAPI,
   callGraphAPIPaginated,
   callGraphAPIDownload

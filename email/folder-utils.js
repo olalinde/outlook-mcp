@@ -46,7 +46,7 @@ async function resolveFolderPath(accessToken, folderName) {
     // Try to find the folder by name
     const folderId = await getFolderIdByName(accessToken, folderName);
     if (folderId) {
-      const path = `me/mailFolders/${folderId}/messages`;
+      const path = `me/mailFolders/${encodeURIComponent(folderId)}/messages`;
       console.error(`Resolved folder "${folderName}" to path: ${path}`);
       return path;
     }
@@ -70,12 +70,12 @@ async function resolveFolderPath(accessToken, folderName) {
 async function getChildFolderIdByName(accessToken, parentFolderId, name) {
   try {
     const endpoint = parentFolderId
-      ? `me/mailFolders/${parentFolderId}/childFolders`
+      ? `me/mailFolders/${encodeURIComponent(parentFolderId)}/childFolders`
       : 'me/mailFolders';
 
     // Try exact match first
     const response = await callGraphAPI(accessToken, 'GET', endpoint, null, {
-      $filter: `displayName eq '${name}'`,
+      $filter: `displayName eq '${name.replace(/'/g, "''")}'`, // OData escapes ' as ''
       $select: 'id,displayName'
     });
     if (response.value && response.value.length > 0) {
@@ -171,7 +171,7 @@ async function getAllFolders(accessToken) {
         const childResponse = await callGraphAPI(
           accessToken,
           'GET',
-          `me/mailFolders/${folder.id}/childFolders`,
+          `me/mailFolders/${encodeURIComponent(folder.id)}/childFolders`,
           null,
           { 
             $select: 'id,displayName,parentFolderId,childFolderCount,totalItemCount,unreadItemCount'

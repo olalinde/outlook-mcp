@@ -2,7 +2,7 @@
  * OneDrive simple upload functionality (files < 4MB)
  */
 const config = require('../config');
-const { callGraphAPI } = require('../utils/graph-api');
+const { callGraphAPI, encodePathSegments } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 
 /**
@@ -49,7 +49,7 @@ async function handleUpload(args) {
 
     // Normalize path
     const normalizedPath = path.replace(/^\/+|\/+$/g, '');
-    const endpoint = `me/drive/root:/${normalizedPath}:/content`;
+    const endpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}:/content`;
 
     // Add conflict behavior query param
     const queryParams = {

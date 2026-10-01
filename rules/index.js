@@ -55,7 +55,7 @@ async function handleEditRuleSequence(args) {
     const updateResult = await callGraphAPI(
       accessToken,
       'PATCH',
-      `me/mailFolders/inbox/messageRules/${rule.id}`,
+      `me/mailFolders/inbox/messageRules/${encodeURIComponent(rule.id)}`,
       {
         sequence: sequence
       }

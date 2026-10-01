@@ -1,7 +1,7 @@
 /**
  * OneDrive get download URL functionality
  */
-const { callGraphAPI } = require('../utils/graph-api');
+const { callGraphAPI, encodePathSegments } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 
 /**
@@ -28,10 +28,10 @@ async function handleDownload(args) {
     // Build endpoint - by ID or by path
     let endpoint;
     if (itemId) {
-      endpoint = `me/drive/items/${itemId}`;
+      endpoint = `me/drive/items/${encodeURIComponent(itemId)}`;
     } else {
       const normalizedPath = path.replace(/^\/+|\/+$/g, '');
-      endpoint = `me/drive/root:/${normalizedPath}`;
+      endpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}`;
     }
 
     // Get item metadata with download URL

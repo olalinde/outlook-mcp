@@ -75,7 +75,7 @@ async function createMailFolder(accessToken, folderName, parentFolderName) {
           message: `Parent folder "${parentFolderName}" not found. Please specify a valid parent folder or leave it blank to create at the root level.`
         };
       }
-      endpoint = `me/mailFolders/${parentId}/childFolders`;
+      endpoint = `me/mailFolders/${encodeURIComponent(parentId)}/childFolders`;
     }
 
     // Check for duplicate only within the target parent (not globally)

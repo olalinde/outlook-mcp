@@ -74,7 +74,7 @@ describe('resolveFolderPath', () => {
         'GET',
         'me/mailFolders',
         null,
-        { $filter: `displayName eq '${customFolderName}'` }
+        { $filter: `displayName eq '${customFolderName}'`, $select: 'id,displayName' }
       );
     });
 
@@ -160,7 +160,7 @@ describe('getFolderIdByName', () => {
       'GET',
       'me/mailFolders',
       null,
-      { $filter: `displayName eq '${folderName}'` }
+      { $filter: `displayName eq '${folderName}'`, $select: 'id,displayName' }
     );
   });
 

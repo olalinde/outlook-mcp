@@ -122,7 +122,7 @@ async function handleDownloadAttachments(args) {
 
   try {
     const accessToken = await ensureAuthenticated();
-    const response = await callGraphAPI(accessToken, 'GET', `me/messages/${messageId}/attachments`);
+    const response = await callGraphAPI(accessToken, 'GET', `me/messages/${encodeURIComponent(messageId)}/attachments`);
 
     const fileAttachments = (response.value || [])
       .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment')
@@ -135,7 +135,7 @@ async function handleDownloadAttachments(args) {
     for (const attachment of fileAttachments) {
       let contentBytes = attachment.contentBytes;
       if (!contentBytes) {
-        const full = await callGraphAPI(accessToken, 'GET', `me/messages/${messageId}/attachments/${attachment.id}`);
+        const full = await callGraphAPI(accessToken, 'GET', `me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachment.id)}`);
         contentBytes = full.contentBytes || '';
       }
       const data = Buffer.from(contentBytes, 'base64');
@@ -170,7 +170,7 @@ async function handleDownloadAttachments(args) {
  * @returns {Promise<Array<{id, name, contentType, contentId, isInline, size}>>}
  */
 async function listAttachmentMetadata(accessToken, messageId) {
-  const response = await callGraphAPI(accessToken, 'GET', `me/messages/${messageId}/attachments`);
+  const response = await callGraphAPI(accessToken, 'GET', `me/messages/${encodeURIComponent(messageId)}/attachments`);
   return (response.value || []).map(a => ({
     id: a.id,
     name: a.name,

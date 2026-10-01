@@ -3,6 +3,11 @@
  */
 const config = require('../config');
 const tokenManager = require('./token-manager');
+const TokenStorage = require('./token-storage');
+
+// Shared token store: ensureAuthenticated (auth/index.js), authenticate and
+// check-auth-status all use this instance, so they see the same tokens.
+const tokenStorage = new TokenStorage();
 
 /**
  * About tool handler
@@ -39,18 +44,15 @@ async function handleAuthenticate(args) {
   }
 
   // Real authentication via OAuth 2.0 device code flow (public client, no secret).
-  const TokenStorage = require('./token-storage');
-  const storage = new TokenStorage();
-
   try {
     if (force) {
-      await storage.clearTokens();
+      await tokenStorage.clearTokens();
     }
 
-    const dc = await storage.startDeviceCode();
+    const dc = await tokenStorage.startDeviceCode();
 
     // Poll in the background; tokens are persisted to disk when sign-in completes.
-    storage.pollDeviceCode(dc.device_code, dc.interval, dc.expires_in)
+    tokenStorage.pollDeviceCode(dc.device_code, dc.interval, dc.expires_in)
       .then(() => console.error('[AUTHENTICATE] Device code sign-in complete; tokens saved.'))
       .catch((err) => console.error(`[AUTHENTICATE] Device code polling failed: ${err.message}`));
 
@@ -71,29 +73,50 @@ async function handleAuthenticate(args) {
 }
 
 /**
- * Check authentication status tool handler
+ * Check authentication status tool handler.
+ * Uses the same path as real tool calls: an expired access token is refreshed
+ * (and the refreshed tokens saved) when a refresh token is available.
  * @returns {object} - MCP response
  */
 async function handleCheckAuthStatus() {
   console.error('[CHECK-AUTH-STATUS] Starting authentication status check');
-  
-  const tokens = tokenManager.loadTokenCache();
-  
-  console.error(`[CHECK-AUTH-STATUS] Tokens loaded: ${tokens ? 'YES' : 'NO'}`);
-  
-  if (!tokens || !tokens.access_token) {
-    console.error('[CHECK-AUTH-STATUS] No valid access token found');
+
+  if (config.USE_TEST_MODE) {
+    const testTokens = tokenManager.loadTokenCache();
     return {
-      content: [{ type: "text", text: "Not authenticated" }]
+      content: [{ type: "text", text: testTokens ? "Authenticated and ready (test mode)" : "Not authenticated (test mode)" }]
     };
   }
-  
-  console.error('[CHECK-AUTH-STATUS] Access token present');
-  console.error(`[CHECK-AUTH-STATUS] Token expires at: ${tokens.expires_at}`);
-  console.error(`[CHECK-AUTH-STATUS] Current time: ${Date.now()}`);
-  
+
+  const tokens = await tokenStorage.getTokens();
+  if (!tokens || !tokens.access_token) {
+    console.error('[CHECK-AUTH-STATUS] No tokens found');
+    return {
+      content: [{ type: "text", text: "Not authenticated. Use the 'authenticate' tool to sign in." }]
+    };
+  }
+
+  const wasExpired = tokenStorage.isTokenExpired();
+  const hadRefreshToken = !!tokens.refresh_token;
+  const accessToken = await tokenStorage.getValidAccessToken();
+
+  if (!accessToken) {
+    console.error('[CHECK-AUTH-STATUS] Access token expired and could not be refreshed');
+    return {
+      content: [{
+        type: "text",
+        text: `Not authenticated: the access token has expired and ${hadRefreshToken ? 'the refresh failed' : 'there is no refresh token'}. Use the 'authenticate' tool to sign in again.`
+      }]
+    };
+  }
+
+  const expiresAt = new Date(tokenStorage.getExpiryTime()).toISOString();
+  console.error(`[CHECK-AUTH-STATUS] Authenticated; access token ${wasExpired ? 'refreshed' : 'valid'}, expires at ${expiresAt}`);
   return {
-    content: [{ type: "text", text: "Authenticated and ready" }]
+    content: [{
+      type: "text",
+      text: `Authenticated and ready${wasExpired ? ' (access token was expired and has been refreshed)' : ''}. Access token expires at ${expiresAt}.`
+    }]
   };
 }
 
@@ -137,6 +160,7 @@ const authTools = [
 ];
 
 module.exports = {
+  tokenStorage,
   authTools,
   handleAbout,
   handleAuthenticate,

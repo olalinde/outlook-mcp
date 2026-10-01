@@ -2,7 +2,7 @@
  * OneDrive list files/folders functionality
  */
 const config = require('../config');
-const { callGraphAPI } = require('../utils/graph-api');
+const { callGraphAPI, encodePathSegments } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 
 /**
@@ -24,7 +24,7 @@ async function handleListFiles(args) {
     } else {
       // Normalize path - remove leading/trailing slashes
       const normalizedPath = path.replace(/^\/+|\/+$/g, '');
-      endpoint = `me/drive/root:/${normalizedPath}:/children`;
+      endpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}:/children`;
     }
 
     const queryParams = {

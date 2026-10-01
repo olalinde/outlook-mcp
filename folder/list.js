@@ -93,7 +93,7 @@ async function getAllFoldersHierarchy(accessToken, includeItemCounts) {
         const childResponse = await callGraphAPI(
           accessToken,
           'GET',
-          `me/mailFolders/${folder.id}/childFolders`,
+          `me/mailFolders/${encodeURIComponent(folder.id)}/childFolders`,
           null,
           { $select: selectFields }
         );

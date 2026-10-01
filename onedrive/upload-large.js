@@ -3,7 +3,7 @@
  */
 const https = require('https');
 const config = require('../config');
-const { callGraphAPI } = require('../utils/graph-api');
+const { callGraphAPI, encodePathSegments } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 
 const CHUNK_SIZE = 320 * 1024 * 10; // 3.2MB chunks (must be multiple of 320KB)
@@ -45,7 +45,7 @@ async function handleUploadLarge(args) {
     const normalizedPath = path.replace(/^\/+|\/+$/g, '');
 
     // Step 1: Create upload session
-    const sessionEndpoint = `me/drive/root:/${normalizedPath}:/createUploadSession`;
+    const sessionEndpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}:/createUploadSession`;
     const sessionBody = {
       item: {
         '@microsoft.graph.conflictBehavior': conflictBehavior

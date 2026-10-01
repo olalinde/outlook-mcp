@@ -1,7 +1,7 @@
 /**
  * OneDrive folder operations (create/delete)
  */
-const { callGraphAPI } = require('../utils/graph-api');
+const { callGraphAPI, encodePathSegments } = require('../utils/graph-api');
 const { ensureAuthenticated } = require('../auth');
 
 /**
@@ -31,7 +31,7 @@ async function handleCreateFolder(args) {
       endpoint = 'me/drive/root/children';
     } else {
       const normalizedPath = path.replace(/^\/+|\/+$/g, '');
-      endpoint = `me/drive/root:/${normalizedPath}:/children`;
+      endpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}:/children`;
     }
 
     const body = {
@@ -100,10 +100,10 @@ async function handleDeleteItem(args) {
     // Get item details first (to confirm existence and get name)
     let endpoint;
     if (itemId) {
-      endpoint = `me/drive/items/${itemId}`;
+      endpoint = `me/drive/items/${encodeURIComponent(itemId)}`;
     } else {
       const normalizedPath = path.replace(/^\/+|\/+$/g, '');
-      endpoint = `me/drive/root:/${normalizedPath}`;
+      endpoint = `me/drive/root:/${encodePathSegments(normalizedPath)}`;
     }
 
     // Get item info first
@@ -122,7 +122,7 @@ async function handleDeleteItem(args) {
     const isFolder = !!itemInfo.folder;
 
     // Delete the item
-    const deleteEndpoint = `me/drive/items/${itemInfo.id}`;
+    const deleteEndpoint = `me/drive/items/${encodeURIComponent(itemInfo.id)}`;
     await callGraphAPI(accessToken, 'DELETE', deleteEndpoint);
 
     return {

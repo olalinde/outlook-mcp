@@ -13,7 +13,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-// TokenStorage logs with console.log; keep stdout reserved for the JSON lines.
+// Keep stdout reserved for the JSON lines, whatever a dependency logs.
 console.log = console.error;
 
 const TokenStorage = require('../auth/token-storage.js');
